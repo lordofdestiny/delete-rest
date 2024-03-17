@@ -101,6 +101,15 @@
                             Source='wix\License.rtf'
                             KeyPath='yes'/>
                     </Component>
+
+                    <Component Id='file0' Guid="6C551071-34D5-4F8C-9CC7-9B48674D4779">
+                        <File
+                            Id='config0'
+                            Name='config.yaml'
+                            DiskId='1'
+                            Source='$(var.CargoTargetBinDir)\config.yaml'
+                            KeyPath='yes'/>
+                    </Component>
                     
                     <Directory Id='Bin' Name='bin'>
                         <Component Id='Path' Guid='C63FCE47-B3D3-4597-8577-570468681252' KeyPath='yes'>
@@ -142,6 +151,7 @@
             <ComponentRef Id='License'/>
             
             <ComponentRef Id='binary0'/>
+            <ComponentRef Id='file0'/>
 
             <Feature
                 Id='Environment'

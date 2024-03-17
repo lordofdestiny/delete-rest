@@ -17,6 +17,7 @@ use serde::{Deserialize, Serialize};
     author = "lordofdestiny",
     about = "A CLI app to delete files based on a configuration file"
 )]
+#[command(arg_required_else_help(true))]
 pub struct AppConfig {
     /// The directory to search for files
     #[clap(short, long, default_value = ".", value_name = "DIR")]
@@ -215,8 +216,27 @@ impl Default for FileFilter {
             .and_then(|mut path| {
                 // Attempt to read the config file from the same directory as the executable
                 path.pop();
+                let exec_dir = path.clone();
+
                 path.push("config.yaml");
-                FileFilter::try_load(&path)
+                println!(
+                    "Attempting to load config from {:?}",
+                    path.display()
+                );
+
+                match FileFilter::try_load(&path) {
+                    Some(config) => Some(config),
+                    None => {
+                        let mut path = exec_dir.clone();
+                        path.pop();
+                        path.push("config.yaml");
+                        println!(
+                            "Attempting to load config from {:?}",
+                            path.canonicalize().unwrap().display()
+                        );
+                        FileFilter::try_load(&path)
+                    }
+                }
             })
             .or_else(|| {
                 // Fallback to the default embedded config
