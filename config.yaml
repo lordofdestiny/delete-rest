@@ -1,0 +1,6 @@
+name: VLA
+formats:
+  - VLA_\d{4}\.\w+
+extensions:
+  - jpg
+  - png

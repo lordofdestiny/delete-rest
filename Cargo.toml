@@ -1,0 +1,31 @@
+[package]
+name = "delete-rest"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+authors = ["lordofdestiny"]
+description = "A tool to extract image files selected by clients"
+
+[[bin]]
+name = "delete-rest"
+path = "src/main.rs"
+
+[lib]
+name = "delete_rest"
+path = "src/lib.rs"
+
+[profile.release]
+panic = "abort"
+
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+serde = { version = "1.0", features = ["derive"] }
+serde_yaml = { version = "0.9.32" }
+serde_regex = "1.1.0"
+regex = "1.10.3"
+regex-macro = "0.2.0"
+thiserror = "1.0.58"
+itertools = "0.12.1"
+clap = { version = "4.5.3", features = ["derive"] }

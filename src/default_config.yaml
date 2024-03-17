@@ -1,0 +1,8 @@
+name: default
+formats:
+  - VLA_\d{4}\.\w+
+  - IMG_\d{4}\.\w+
+extensions:
+  - jpg
+  - png
+  - cr2
