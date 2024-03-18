@@ -14,12 +14,6 @@ use serde::{Deserialize, Serialize};
 #[derive(Clone)]
 pub struct SelectedDirectory(PathBuf);
 
-#[derive(Clone)]
-pub struct SelectedFiles {
-    pub dir: SelectedDirectory,
-    pub files: Vec<PathBuf>,
-}
-
 impl TryFrom<PathBuf> for SelectedDirectory {
     type Error = std::io::Error;
     fn try_from(path: PathBuf) -> Result<Self, Self::Error> {
@@ -72,15 +66,11 @@ impl SelectedDirectory {
     }
 }
 
-impl TryFrom<SelectedDirectory> for SelectedFiles {
-    type Error = std::io::Error;
-    fn try_from(selected: SelectedDirectory) -> Result<Self, Self::Error> {
-        let files = selected.read_recursive_path()?;
-        Ok(SelectedFiles {
-            dir: selected,
-            files,
-        })
-    }
+
+#[derive(Clone)]
+pub struct SelectedFiles {
+    pub dir: SelectedDirectory,
+    pub files: Vec<PathBuf>,
 }
 
 impl SelectedFiles {
@@ -92,6 +82,19 @@ impl SelectedFiles {
         self.files.len()
     }
 }
+
+
+impl TryFrom<SelectedDirectory> for SelectedFiles {
+    type Error = std::io::Error;
+    fn try_from(selected: SelectedDirectory) -> Result<Self, Self::Error> {
+        let files = selected.read_recursive_path()?;
+        Ok(SelectedFiles {
+            dir: selected,
+            files,
+        })
+    }
+}
+
 
 /// Command line arguments for the delete-rest app
 ///
