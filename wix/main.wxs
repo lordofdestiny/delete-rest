@@ -102,7 +102,7 @@
                             KeyPath='yes'/>
                     </Component>
 
-                    <Component Id='file0' Guid="6C551071-34D5-4F8C-9CC7-9B48674D4779">
+                    <Component Id='cfg_file0' Guid="6C551071-34D5-4F8C-9CC7-9B48674D4779">
                         <File
                             Id='config0'
                             Name='config.yaml'
@@ -151,7 +151,6 @@
             <ComponentRef Id='License'/>
             
             <ComponentRef Id='binary0'/>
-            <ComponentRef Id='file0'/>
 
             <Feature
                 Id='Environment'
@@ -163,8 +162,20 @@
             </Feature>
         </Feature>
 
-        <SetProperty Id='ARPINSTALLLOCATION' Value='[APPLICATIONFOLDER]' After='CostFinalize'/>
+        <Feature
+            Id="DefaultConfig"
+            Title="Default Configuration File"
+            Description="Installs the default configuration file for the application."
+            Level="1"
+            ConfigurableDirectory="APPLICATIONFOLDER"
+            AllowAdvertise="no"
+            Display="collapse"
+            Absent="allow"
+        >
+            <ComponentRef Id='cfg_file0'/>
+        </Feature>
 
+        <SetProperty Id='ARPINSTALLLOCATION' Value='[APPLICATIONFOLDER]' After='CostFinalize'/>
         
         <!--
           Uncomment the following `Icon` and `Property` tags to change the product icon.

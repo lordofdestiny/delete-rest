@@ -11,6 +11,27 @@ use regex::Regex;
 use regex_macro::regex;
 use serde::{Deserialize, Serialize};
 
+/// Command line arguments for the delete-rest app
+///
+/// This struct is used to parse command line arguments using the `clap` crate.
+///
+/// By default, if no flags are provided, the help message will be printed.
+///
+/// # Operations
+/// - Copy matching files to the specified directory (default)
+/// - Move matching files to the specified directory
+/// - Delete non-matching files
+///
+/// ## Options:
+/// - `path`: The directory to search for files
+/// - `keep`: The file to use as the keep file
+/// - `config`: The configuration file to use
+/// - `move_to`: Move matching files to the specified directory
+/// - `copy_to`: Copy matching files to the specified directory
+/// - `delete`: Delete non-matching files
+/// - `dry_run`: Only print what would be done, don't actually do anything.
+/// - `verbose`: Print detailed information about what's happening
+/// - `print_config`: Print parsed configuration and exit
 #[derive(Parser, Debug)]
 #[clap(
     name = "delete-rest",
@@ -31,12 +52,8 @@ pub struct AppConfig {
     #[clap(long)]
     config: Option<String>,
 
-    #[clap(long, default_value = "false")]
-    /// Only print what would be done, don't actually do anything.
-    dry_run: bool,
-
     /// Move matching files to the specified directory
-    /// This option is mutually exclusive with `delete`
+    /// This option is mutually exclusive with `delete` and `copy-to`
     #[clap(
         short,
         long,
@@ -47,6 +64,7 @@ pub struct AppConfig {
     move_to: Option<String>,
 
     /// Copy matching files to the specified directory
+    /// This option is mutually exclusive with `move-to` and `delete`
     #[clap(
         short,
         long,
@@ -57,7 +75,7 @@ pub struct AppConfig {
     copy_to: Option<String>,
 
     /// Delete non-matching files
-    /// This option is mutually exclusive with `move-to`
+    /// This option is mutually exclusive with `move-to` and `copy-to`
     #[clap(
         short,
         long,
@@ -66,31 +84,54 @@ pub struct AppConfig {
     )]
     delete: bool,
 
+    /// Only print what would be done, don't actually do anything.
+    #[clap(long, default_value = "false")]
+    dry_run: bool,
+
     /// Print detailed information about what's happening
     #[clap(short, long)]
     verbose: bool,
 
-    // Print parsed configuration and exit
+    /// Print parsed configuration and exit
     #[clap(long, exclusive = true)]
     pub print_config: bool,
 }
 
+/// The action to perform on matching files
+///
+/// This enum represents the action to perform on matching files.
+/// It is calculated from the command line arguments.
 #[derive(Debug, Clone)]
 pub enum Action {
+    /// Copy matching files to the specified directory
     MoveTo(String),
+    /// Move matching files to the specified directory
     CopyTo(String),
+    /// Delete non-matching files
     Delete,
 }
 
 impl AppConfig {
+    /// Get the path of the keep file
     pub fn keepfile(&self) -> &str {
         &self.keep
     }
 
+    /// Should the detailed information be printed?
     pub fn verbose(&self) -> bool {
         self.verbose
     }
 
+    /// Derive the action to perform on matching files
+    ///
+    /// This method returns the action to perform on matching files, depending on the command line arguments.
+    /// It also returns a boolean indicating whether the action should be performed in dry-run mode.
+    ///
+    /// The actions are prioritized as follows:
+    /// - If `copy_to` is specified, the action is `CopyTo`.
+    /// - If `move_to` is specified, the action is `MoveTo`.
+    /// - If no action is specified, the action is `CopyTo`, with the default directory being `./selected`.
+    /// - If `delete` is specified, the action is `Delete`.
     pub fn action(&self) -> (Action, bool) {
         let Self {
             dry_run,
@@ -110,15 +151,35 @@ impl AppConfig {
         )
     }
 
-    pub fn matching_files(&self) -> std::io::Result<Vec<PathBuf>> {
+    /// Get the path of all matching files
+    ///
+    /// This method returns a vector of all the matching files in the specified directory.
+    /// It uses the `path` field of the `AppConfig` struct to search for files.
+    ///
+    /// Directories are searched recursively.
+    ///
+    /// # Errors
+    ///
+    /// Errors are returned in the following cases, but not limited to:
+    ///
+    /// - If the specified directory does not exist
+    /// - If the specified directory is not readable
+    /// - If an I/O error occurs while reading the directory
+    /// - Path canonicalization fails
+    pub fn all_files_in_path(&self) -> std::io::Result<Vec<PathBuf>> {
         let path = Path::new(&self.path);
+        // All found files
         let mut files = Vec::new();
+        // Stack for recursive search
         let mut stack: Vec<_> = path.read_dir()?.flat_map(Result::ok).collect();
 
+        // Iterate over the stack until it's empty
         while let Some(entry) = stack.pop() {
             if entry.path().is_dir() {
+                // If the entry is a directory, add its contents to the stack
                 stack.extend(entry.path().read_dir()?.flat_map(Result::ok));
             } else {
+                // Else, add the file to the list of found files
                 files.push(entry.path().canonicalize()?);
             }
         }
@@ -126,15 +187,27 @@ impl AppConfig {
         Ok(files)
     }
 
+    /// Read the keep file
+    ///
+    /// This method reads the keep file and returns a list of numbers to keep.
+    ///
+    /// # Errors
+    /// Possible errors include:
+    /// - If the keep file does not exist
+    /// - If the keep file is not readable
+    /// - If an I/O error occurs while reading the keep file
+    /// - If the keep file contains invalid lines
     pub fn read_to_keep(&self) -> Result<KeepFile, KeepFileError> {
-        let path = Path::new(&self.keep);
-        let path = path.canonicalize()?;
+        let path = Path::new(&self.keep).canonicalize()?;
         let file = std::fs::File::open(path.clone())?;
         let reader = std::io::BufReader::new(file);
+        // Split the lines into valid and invalid lines
         let (valid, invalid): (Vec<_>, Vec<_>) = reader
             .lines()
             .enumerate()
+            // Filter out invalid lines
             .filter_map(|(num, line)| line.ok().map(|line| (num, line)))
+            // Parse the lines into numbers, or return an error
             .map(|(num, line)| match line.parse() {
                 Ok(ord) => Ok(KeepFileLine(ord)),
                 Err(_) => Err(KeepFileLineError(num, line)),
@@ -145,12 +218,18 @@ impl AppConfig {
             Ok(KeepFile { lines: valid })
         } else {
             Err(KeepFileError::Format {
-                filename: path.file_name().unwrap().to_str().unwrap().to_owned(),
-                lines: invalid.into(),
+                filename: self.keep.clone(),
+                lines: KeepFileLineErrors(invalid),
             })
         }
     }
 
+    /// Get the file filter configuration
+    ///
+    /// This method returns the file filter configuration to use.
+    ///
+    /// If the `config` field is `None`, the default configuration is used.
+    /// Else, the configuration is loaded from the specified file.
     pub fn filter_config(&self) -> FileFilter {
         self.config
             .as_ref()
@@ -160,10 +239,23 @@ impl AppConfig {
     }
 }
 
+/// A file filter configuration
+///
+/// This type describes how to filter files based on their names and extensions.
+///
+/// # Default values
+/// Default configuration is resolved in the following order:
+/// 1. Look for a file named `config.yaml` in the same directory as the executable
+/// 2. Look for a file named `config.yaml` in the parent directory of the executable
+/// 3. Use the default embedded configuration
+/// 4. Use the hardcoded default configuration
 #[derive(Debug, Serialize, Deserialize)]
 pub struct FileFilter {
+    /// The name of the filter configuration
     name: Option<String>,
+    /// The list of file extensions to match
     extensions: Vec<String>,
+    /// The list of file formats to match
     formats: Vec<Format>,
 }
 
@@ -181,59 +273,24 @@ impl Display for FileFilter {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize)]
-pub struct Format(#[serde(with = "serde_regex")] Regex);
-
-impl Display for Format {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "\"{}\"", self.0.as_str())
-    }
-}
-
-impl From<Regex> for Format {
-    fn from(re: Regex) -> Self {
-        Format(re)
-    }
-}
-
-impl Format {
-    pub fn matches<P: AsRef<Path>>(&self, extensions: &[String], path: P) -> Option<bool> {
-        let path = path.as_ref();
-        let file_name = path.file_name()?.to_str()?;
-        let file_extension = path.extension()?.to_str()?;
-        if !extensions.contains(&file_extension.to_string()) {
-            return Some(false);
-        }
-
-        Some(self.0.is_match(file_name))
-    }
-}
-
 impl Default for FileFilter {
     fn default() -> Self {
+        // Get the path of the executable
         std::env::current_exe()
             .ok()
             .and_then(|mut path| {
-                // Attempt to read the config file from the same directory as the executable
+                // Attempt to read the config.yaml file from the same directory as the executable
                 path.pop();
                 let exec_dir = path.clone();
-
                 path.push("config.yaml");
-                println!(
-                    "Attempting to load config from {:?}",
-                    path.display()
-                );
 
                 match FileFilter::try_load(&path) {
                     Some(config) => Some(config),
                     None => {
+                        // Attempt to read the config.yaml file from the parent directory of the executable
                         let mut path = exec_dir.clone();
                         path.pop();
                         path.push("config.yaml");
-                        println!(
-                            "Attempting to load config from {:?}",
-                            path.canonicalize().unwrap().display()
-                        );
                         FileFilter::try_load(&path)
                     }
                 }
@@ -256,15 +313,24 @@ impl Default for FileFilter {
 }
 
 impl FileFilter {
+    /// Try to load a file filter configuration from the specified path
+    ///
+    /// This method attempts to load a file filter configuration from the specified path.
+    ///
+    /// If the file does not exist, or if an error occurs while reading the file, `None` is returned.
     fn try_load(config_path: &Path) -> Option<Self> {
         let config_str = std::fs::read_to_string(config_path).ok()?;
         serde_yaml::from_str(&config_str).ok()?
     }
 
+    /// Load a file filter configuration from the specified path
+    ///
+    /// Load a file filter configuration from the specified path, or return the default configuration if the file does not exist.
     fn load(config_path: &Path) -> Self {
         FileFilter::try_load(config_path).unwrap_or_default()
     }
 
+    /// Check if a file name has one of the specified extensions
     fn has_extension_impl<P: AsRef<Path>>(extensions: &[String], path: P) -> bool {
         let path = path.as_ref();
         match path.extension() {
@@ -276,10 +342,12 @@ impl FileFilter {
         }
     }
 
+    /// Check if a file name has one of the configured extensions
     pub fn has_extension<P: AsRef<Path>>(&self, path: P) -> bool {
         Self::has_extension_impl(&self.extensions, path)
     }
 
+    /// Check if a file name has one of the formats
     fn has_format_impl<P: AsRef<Path>>(formats: &[Format], extensions: &[String], path: P) -> bool {
         formats
             .iter()
@@ -287,21 +355,33 @@ impl FileFilter {
             .any(|x| x)
     }
 
+    /// Check if a file name has one of the configured formats
     pub fn has_format<P: AsRef<Path>>(&self, path: P) -> bool {
         Self::has_format_impl(&self.formats, &self.extensions, path)
     }
 
+    /// Check if a file name matches the one of the formats and has one of the extensions
     fn matches_impl<P: AsRef<Path>>(formats: &[Format], extensions: &[String], path: P) -> bool {
         let path = path.as_ref();
         Self::has_extension_impl(extensions, path)
             && Self::has_format_impl(formats, extensions, path)
     }
 
+    /// Check if a file name matches one of the configured formats and has one of the configured extensions
     pub fn matches<P: AsRef<Path>>(&self, path: P) -> bool {
         let path = path.as_ref();
         self.has_format(path) && self.has_extension(path)
     }
 
+    /// Convert the file filter configuration into a matcher function
+    ///
+    /// This method converts the file filter configuration into a matcher function that can be used to filter files.
+    ///
+    /// The matcher function takes a reference to a `PathBuf` and returns a boolean indicating whether the file should be kept.
+    ///
+    /// The matcher function is a closure that captures the `extensions` and `formats` fields of the `FileFilter` struct,
+    /// and is cloneable. This allows the matcher function to be used in multiple places without cloning the `FileFilter` struct,
+    /// and allows cloning of the iterators where the matcher function is used.
     pub fn into_matcher(self) -> impl Fn(&&PathBuf) -> bool + Clone {
         let Self {
             extensions,
@@ -333,6 +413,43 @@ impl FileFilter {
     }
 }
 
+/// A file name format
+///
+/// This is a wrapper around a regular expression that describes a file name format.
+///
+/// It provides Display and utility methods to check if a file name matches the format, given a list of extensions.
+#[derive(Debug, Serialize, Deserialize)]
+pub struct Format(#[serde(with = "serde_regex")] Regex);
+
+impl Display for Format {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "\"{}\"", self.0.as_str())
+    }
+}
+
+impl From<Regex> for Format {
+    fn from(re: Regex) -> Self {
+        Format(re)
+    }
+}
+
+impl Format {
+    /// Check if a file name matches the format, and has one of the specified extensions
+    pub fn matches<P: AsRef<Path>>(&self, extensions: &[String], path: P) -> Option<bool> {
+        let path = path.as_ref();
+        let file_name = path.file_name()?.to_str()?;
+        let file_extension = path.extension()?.to_str()?;
+        if !extensions.contains(&file_extension.to_string()) {
+            return Some(false);
+        }
+
+        Some(self.0.is_match(file_name))
+    }
+}
+
+/// A list of numbers to keep
+///
+/// This type represents a list of numbers to keep from the matching files.
 #[derive(Debug)]
 pub struct KeepFile {
     pub lines: Vec<KeepFileLine>,
@@ -347,21 +464,29 @@ impl IntoIterator for KeepFile {
     }
 }
 
+/// The type of matcher to generate from the keep file
 #[derive(Debug, Copy, Clone)]
 pub enum KeepFileMatcherType {
+    /// Include files that match the numbers in the keep file
     Include,
+    /// Exclude files that match the numbers in the keep file
     Exclude,
 }
 
 impl KeepFile {
+    /// Get an iterator over the list of numbers to keep
     pub fn iter(&self) -> std::slice::Iter<KeepFileLine> {
         self.lines.iter()
     }
 
+    /// Get a mutable iterator over the list of numbers to keep
     pub fn iter_mut(&mut self) -> std::slice::IterMut<KeepFileLine> {
         self.lines.iter_mut()
     }
 
+    /// Check if a file name matches contains a number
+    ///
+    /// This method checks if a file name contains a number that matches the specified number.
     pub fn matches_number(filename: &str, num: u32) -> bool {
         regex!(r#"(\d+)"#)
             .captures(filename)
@@ -370,9 +495,19 @@ impl KeepFile {
             .map_or(false, |m: u32| m == num)
     }
 
+    /// Convert the keep file into a matcher function
+    ///
+    /// This method converts the keep file into a matcher function that can be used to filter files.
+    ///
+    /// The matcher function takes a reference to a `PathBuf` and returns a boolean indicating whether the file should be kept.
+    ///
+    /// The matcher function is a closure that captures the `lines` field of the `KeepFile` struct,
+    /// and is cloneable. This allows the matcher function to be used in multiple places without cloning the `KeepFile` struct,
+    /// and allows cloning of the iterators where the matcher function is used.
     pub fn into_matcher(self, mtype: KeepFileMatcherType) -> impl Fn(&&PathBuf) -> bool + Clone {
         let lines = Rc::new(RefCell::new(self.lines));
         move |path| {
+            // Get the file name, exit early if it doesn't exist
             let Some(filename) = path.file_name().and_then(|f| f.to_str()) else {
                 return false;
             };
@@ -391,20 +526,17 @@ impl KeepFile {
     }
 }
 
+/// Wrapper around a number to keep
 #[derive(Debug)]
 pub struct KeepFileLine(u32);
 
+/// Number and content of a line in keep file that doesn't contain a number
 #[derive(Debug)]
 pub struct KeepFileLineError(usize, String);
 
+/// List of lines in the keep file that don't contain a number
 #[derive(Debug)]
 pub struct KeepFileLineErrors(pub Vec<KeepFileLineError>);
-
-impl From<Vec<KeepFileLineError>> for KeepFileLineErrors {
-    fn from(errors: Vec<KeepFileLineError>) -> Self {
-        KeepFileLineErrors(errors)
-    }
-}
 
 impl Display for KeepFileLineErrors {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -415,13 +547,18 @@ impl Display for KeepFileLineErrors {
     }
 }
 
+/// Error type for keep file loading
+///
+/// This type represents the possible errors that can occur while loading the keep file.
 #[derive(thiserror::Error, Debug)]
 pub enum KeepFileError {
+    /// The keep file contains invalid lines
     #[error("One or more lines in the keepfile \"{}\" are invalid:\n{}", .filename, .lines)]
     Format {
         filename: String,
         lines: KeepFileLineErrors,
     },
+    /// An I/O error occurred while reading the keep file
     #[error("I/O error: {0}")]
     Io(#[from] std::io::Error),
 }

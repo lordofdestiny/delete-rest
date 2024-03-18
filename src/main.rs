@@ -2,30 +2,30 @@ use std::path::{Path, PathBuf};
 
 use clap::Parser;
 
-use delete_rest::{Action, AppConfig, KeepFileError};
-use delete_rest::KeepFileMatcherType::{Exclude, Include};
+use delete_rest_lib::KeepFileMatcherType::{Exclude, Include};
+use delete_rest_lib::{Action, AppConfig, KeepFileError};
 
-#[derive(thiserror::Error, Debug)]
-enum AppError {
-    #[error("I/O error: {0}")]
-    Io(#[from] std::io::Error),
-    #[error("invalid cfg format: {0}")]
-    Yaml(#[from] serde_yaml::Error),
-    #[error("One or more lines in the keep file are invalid")]
-    BadKeepFile(#[from] KeepFileError),
-}
-
+/// Deletes files that match the filter
+///
+/// Deletes files that match the filter. If `dry_run` is true, the files will not be deleted.
+/// If `verbose` is true, the files will be printed before being deleted.
+///
+/// # Arguments
+/// - `matching_files` - an iterator over the files to be deleted
+/// - `dry_run` - if true, the files will not be deleted
+/// - `verbose` - if true, the files will be printed before being deleted
 fn handle_delete<'a>(matching_files: impl Iterator<Item = &'a Path>, dry_run: bool, verbose: bool) {
     let mut errors = 0;
     for file in matching_files {
         if verbose {
             println!("Deleting: {}", file.display());
         }
-        if !dry_run {
-            if let Err(e) = std::fs::remove_file(file) {
-                eprintln!("Error: {}", e);
-                errors += 1;
-            }
+        if dry_run {
+            continue;
+        }
+        if let Err(e) = std::fs::remove_file(file) {
+            eprintln!("Error: {}", e);
+            errors += 1;
         }
     }
     if errors > 0 {
@@ -33,12 +33,30 @@ fn handle_delete<'a>(matching_files: impl Iterator<Item = &'a Path>, dry_run: bo
     }
 }
 
+/// Makes a pair of source and destination paths
+///
+/// # Arguments
+/// - `file` - the source file
+/// - `dir` - the destination directory
+///
+/// # Returns
+/// - (source, destination) - a pair of source and destination paths
 pub fn make_from_to<'a>(file: &'a Path, dir: &str) -> Option<(&'a Path, PathBuf)> {
     let path = Path::new(&dir);
     let filename = file.file_name()?.to_str()?.to_string();
     Some((file, path.join(filename)))
 }
 
+/// Moves files that match the filter to the specified directory
+///
+/// Moves files that match the filter to the specified directory. If `dry_run` is true, the files will not be moved.
+/// If `verbose` is true, the files will be printed before being moved.
+///
+/// # Arguments
+/// - `matching_files` - an iterator over the files to be moved
+/// - `dir` - the directory to move the files to
+/// - `dry_run` - if true, the files will not be moved
+/// - `verbose` - if true, the files will be printed before being moved
 fn handle_move_to<'a>(
     matching_files: impl Iterator<Item = &'a Path>,
     dir: &str,
@@ -53,10 +71,17 @@ fn handle_move_to<'a>(
         if dry_run {
             continue;
         }
-        if let Some(parent) = to.parent() {
-            std::fs::create_dir_all(parent).expect("Failed to create directory");
-            if let Err(e) = std::fs::rename(from, to) {
-                eprintln!("Error: {}", e);
+        match to.parent() {
+            Some(parent) => {
+                // Create the parent directories if they don't exist
+                std::fs::create_dir_all(parent).expect("Failed to create directory");
+                if let Err(e) = std::fs::rename(from, to) {
+                    eprintln!("Error: {}", e);
+                    errors += 1;
+                }
+            }
+            None => {
+                eprintln!("Error: Failed to get parent directory");
                 errors += 1;
             }
         }
@@ -66,6 +91,16 @@ fn handle_move_to<'a>(
     }
 }
 
+/// Copies files that match the filter to the specified directory
+///
+/// Copies files that match the filter to the specified directory. If `dry_run` is true, the files will not be copied.
+/// If `verbose` is true, the files will be printed before being copied.
+///
+/// # Arguments
+/// - `matching_files` - an iterator over the files to be copied
+/// - `dir` - the directory to copy the files to
+/// - `dry_run` - if true, the files will not be copied
+/// - `verbose` - if true, the files will be printed before being copied
 fn handle_copy_to<'a>(
     matching_files: impl Iterator<Item = &'a Path>,
     dir: &str,
@@ -80,10 +115,17 @@ fn handle_copy_to<'a>(
         if dry_run {
             continue;
         }
-        if let Some(parent) = to.parent() {
-            std::fs::create_dir_all(parent).expect("Failed to create directory");
-            if let Err(e) = std::fs::copy(from, to) {
-                eprintln!("Error: {}", e);
+        match to.parent() {
+            Some(parent) => {
+                // Create the parent directories if they don't exist
+                std::fs::create_dir_all(parent).expect("Failed to create directory");
+                if let Err(e) = std::fs::copy(from, to) {
+                    eprintln!("Error: {}", e);
+                    errors += 1;
+                }
+            }
+            None => {
+                eprintln!("Error: Failed to get parent directory");
                 errors += 1;
             }
         }
@@ -93,7 +135,26 @@ fn handle_copy_to<'a>(
     }
 }
 
+/// The main function
+///
+/// The main function parses the command line arguments, reads the configuration file, and processes the files.
+///
+/// # Steps
+/// 1. Parse the command line arguments
+///     - If there is no arguments, or the `--help` flag is set, print the help message and return
+///     - If the `--print-config` flag is set, print the configuration and return
+/// 2. Read the configuration file
+///     - If the configuration file is not found, print an error message and return
+/// 3. Get the files that match the filter
+///     1. Get all the files in the specified path </li>
+///     2. Filter the files that match the filter </li>
+/// 4. Get the file names from the keep file
+/// 5. Process the files ( separate files to keep and files to delete )
+///     1. Extract the action from the configuration
+///     2. Get the files to keep
+/// 6. Execute the action
 fn main() {
+    // Step 1
     let app_cfg = AppConfig::parse();
 
     if app_cfg.print_config {
@@ -101,16 +162,19 @@ fn main() {
         return;
     }
 
+    // Step 2
     let filter = app_cfg.filter_config();
 
-    let files = match app_cfg.matching_files() {
+    // Step 3.1
+    let files = match app_cfg.all_files_in_path() {
         Ok(files) => files,
         Err(e) => {
             eprintln!("Error: {}", e);
             return;
         }
     };
-
+    
+    // Step 3.2
     let matching_files = files.iter().filter(filter.into_matcher());
     let total_files_cnt = files.len();
     let matching_files_cnt = matching_files.clone().count();
@@ -119,6 +183,7 @@ fn main() {
         println!("Matching files: {matching_files_cnt}/{total_files_cnt}");
     }
 
+    // Step 4
     let keep = match app_cfg.read_to_keep() {
         Ok(keep) => keep,
         Err(error) => {
@@ -134,13 +199,15 @@ fn main() {
             return;
         }
     };
-
+    
+    // Step 5.1
     let action = app_cfg.action();
     let keep_type = match action.0 {
         Action::Delete => Exclude,
         _ => Include,
     };
-
+    
+    // Step 5.2
     let matching_files = matching_files
         .filter(keep.into_matcher(keep_type))
         .map(|path| path.as_path());
@@ -148,6 +215,7 @@ fn main() {
 
     println!("Keeping files: {should_keep_cnt}/{matching_files_cnt}");
 
+    // Step 6
     match action {
         (Action::Delete, dry_run) => {
             handle_delete(matching_files, dry_run, app_cfg.verbose());
