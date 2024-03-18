@@ -104,9 +104,9 @@ pub struct AppConfig {
 #[derive(Debug, Clone)]
 pub enum Action {
     /// Copy matching files to the specified directory
-    MoveTo(String),
+    MoveTo(PathBuf),
     /// Move matching files to the specified directory
-    CopyTo(String),
+    CopyTo(PathBuf),
     /// Delete non-matching files
     Delete,
 }
@@ -170,7 +170,6 @@ impl AppConfig {
     /// - If `delete` is specified, the action is `Delete`.
     pub fn action(&self) -> Action {
         let Self {
-            dry_run,
             delete,
             move_to,
             copy_to,
@@ -178,9 +177,9 @@ impl AppConfig {
         } = self;
 
         match (move_to, copy_to, delete) {
-            (_, Some(path), _) => Action::CopyTo(path.clone()),
-            (Some(path), _, _) => Action::MoveTo(path.clone()),
-            (None, None, false) => Action::CopyTo("./selected".to_string()),
+            (_, Some(path), _) => Action::CopyTo(PathBuf::from(path)),
+            (Some(path), _, _) => Action::MoveTo(PathBuf::from(path)),
+            (None, None, false) => Action::CopyTo(PathBuf::from("selected")),
             (_, _, true) => Action::Delete,
         }
     }

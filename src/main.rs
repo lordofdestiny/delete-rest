@@ -16,19 +16,24 @@ use delete_rest_lib::{Action, AppConfig, KeepFileError};
 fn handle_delete<'a>(app_config: AppConfig, matching_files: impl Iterator<Item = &'a Path>) {
     let options = app_config.options();
     let mut errors = 0;
+
+    if options.dry_run {
+        if options.verbose {
+            matching_files.for_each(|file: &Path| println!("Deleting: {}", file.display()));
+        }
+        return;
+    }
     
     for file in matching_files {
         if options.verbose {
             println!("Deleting: {}", file.display());
-        }
-        if options.dry_run {
-            continue;
         }
         if let Err(e) = std::fs::remove_file(file) {
             eprintln!("Error: {}", e);
             errors += 1;
         }
     }
+    
 
     if errors > 0 {
         eprintln!("{} errors occurred", errors);
@@ -43,10 +48,9 @@ fn handle_delete<'a>(app_config: AppConfig, matching_files: impl Iterator<Item =
 ///
 /// # Returns
 /// - (source, destination) - a pair of source and destination paths
-pub fn make_from_to<'a>(file: &'a Path, dir: &str) -> Option<(&'a Path, PathBuf)> {
-    let path = Path::new(&dir);
+pub fn make_from_to<'a>(file: &'a Path, dir: &Path) -> Option<(&'a Path, PathBuf)> {
     let filename = file.file_name()?.to_str()?.to_string();
-    Some((file, path.join(filename)))
+    Some((file, dir.join(filename)))
 }
 
 /// Moves files that match the filter to the specified directory
@@ -62,16 +66,21 @@ pub fn make_from_to<'a>(file: &'a Path, dir: &str) -> Option<(&'a Path, PathBuf)
 fn handle_move_to<'a>(
     app_config: AppConfig,
     matching_files: impl Iterator<Item = &'a Path>,
-    dir: &str,
+    dir: &Path,
 ) {
     let options = app_config.options();
     let mut errors = 0;
+
+    if options.dry_run {
+        if options.verbose {
+            matching_files.for_each(|file: &Path| println!("Moving: {}", file.display()));
+        }
+        return;
+    }
+
     for (from, to) in matching_files.filter_map(|file| make_from_to(file, dir)) {
         if options.verbose {
             println!("Moving from {} to {}", from.display(), to.display());
-        }
-        if options.dry_run {
-            continue;
         }
         match to.parent() {
             Some(parent) => {
@@ -106,16 +115,21 @@ fn handle_move_to<'a>(
 fn handle_copy_to<'a>(
     app_config: AppConfig,
     matching_files: impl Iterator<Item = &'a Path>,
-    dir: &str,
+    dir: &Path,
 ) {
-    let options= app_config.options();
+    let options = app_config.options();
     let mut errors = 0;
+
+    if options.dry_run {
+        if options.verbose {
+            matching_files.for_each(|file: &Path| println!("Copying: {}", file.display()));
+        }
+        return;
+    }
+
     for (from, to) in matching_files.filter_map(|file| make_from_to(file, dir)) {
         if options.verbose {
             println!("Copying from {} to {}", from.display(), to.display());
-        }
-        if options.dry_run {
-            continue;
         }
         match to.parent() {
             Some(parent) => {
@@ -199,7 +213,7 @@ fn main() {
             return;
         }
     };
-
+    
     // Step 5
     let action = app_cfg.action();
     let matching_files = matching_files
