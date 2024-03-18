@@ -18,7 +18,7 @@ impl TryFrom<PathBuf> for SelectedDirectory {
     type Error = std::io::Error;
     fn try_from(path: PathBuf) -> Result<Self, Self::Error> {
         if path.is_dir() {
-            Ok(SelectedDirectory(path))
+            path.canonicalize().map(Self)
         } else {
             Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidInput,
@@ -94,6 +94,8 @@ impl TryFrom<SelectedDirectory> for SelectedFiles {
 }
 
 pub trait FileSource {
+    fn dir(&self) -> &Path;
+
     fn files(&self) -> impl Iterator<Item = &PathBuf> + Clone;
 
     fn iter(&self) -> impl Iterator<Item = &PathBuf> + Clone {
@@ -113,6 +115,9 @@ pub trait FileSource {
 }
 
 impl FileSource for SelectedFiles {
+    fn dir(&self) -> &Path {
+        &self.dir.0
+    }
     fn files(&self) -> impl Iterator<Item = &PathBuf> + Clone {
         self.files.iter()
     }
@@ -135,6 +140,9 @@ impl<F: FileSource, T: Fn(&&PathBuf) -> bool + Clone> FilteredFiles<F, T> {
 }
 
 impl<F: FileSource, T: Fn(&&PathBuf) -> bool + Clone> FileSource for FilteredFiles<F, T> {
+    fn dir(&self) -> &Path {
+        self.source.dir()
+    }
     fn files(&self) -> impl Iterator<Item = &PathBuf> + Clone {
         self.iter()
     }

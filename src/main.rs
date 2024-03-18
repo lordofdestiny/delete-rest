@@ -41,19 +41,6 @@ fn handle_delete(app_config: AppConfig, matching_files: impl FileSource) {
     }
 }
 
-/// Makes a pair of source and destination paths
-///
-/// # Arguments
-/// - `file` - the source file
-/// - `dir` - the destination directory
-///
-/// # Returns
-/// - (source, destination) - a pair of source and destination paths
-pub fn make_from_to<'a>(file: &'a Path, dir: &Path) -> Option<(&'a Path, PathBuf)> {
-    let filename = file.file_name()?.to_str()?.to_string();
-    Some((file, dir.join(filename)))
-}
-
 /// Moves files that match the filter to the specified directory
 ///
 /// Moves files that match the filter to the specified directory. If `dry_run` is true, the files will not be moved.
@@ -64,7 +51,7 @@ pub fn make_from_to<'a>(file: &'a Path, dir: &Path) -> Option<(&'a Path, PathBuf
 /// - `dir` - the directory to move the files to
 /// - `dry_run` - if true, the files will not be moved
 /// - `verbose` - if true, the files will be printed before being moved
-fn handle_move_to(app_config: AppConfig, matching_files: impl FileSource, dir: &Path) {
+fn handle_move_to(app_config: AppConfig, matching_files: impl FileSource, dest_dir: PathBuf) {
     let options = app_config.options();
     let mut errors = 0;
 
@@ -77,18 +64,21 @@ fn handle_move_to(app_config: AppConfig, matching_files: impl FileSource, dir: &
         return;
     }
 
-    for (from, to) in matching_files
-        .iter()
-        .filter_map(|file| make_from_to(file, dir))
-    {
+    let src_dir = matching_files.dir();
+    for src in matching_files.iter() {
+        let Ok(dest) = src.strip_prefix(src_dir).map(|p| dest_dir.join(p)) else {
+            continue;
+        };
+
         if options.verbose {
-            println!("Moving from {} to {}", from.display(), to.display());
+            println!("Moving from {} to {}", src.display(), dest.display());
         }
-        match to.parent() {
+        
+        match dest.parent() {
             Some(parent) => {
                 // Create the parent directories if they don't exist
                 std::fs::create_dir_all(parent).expect("Failed to create directory");
-                if let Err(e) = std::fs::rename(from, to) {
+                if let Err(e) = std::fs::rename(src, dest) {
                     eprintln!("Error: {}", e);
                     errors += 1;
                 }
@@ -114,7 +104,7 @@ fn handle_move_to(app_config: AppConfig, matching_files: impl FileSource, dir: &
 /// - `dir` - the directory to copy the files to
 /// - `dry_run` - if true, the files will not be copied
 /// - `verbose` - if true, the files will be printed before being copied
-fn handle_copy_to(app_config: AppConfig, matching_files: impl FileSource, dir: &Path) {
+fn handle_copy_to(app_config: AppConfig, matching_files: impl FileSource, dest_dir: PathBuf) {
     let options = app_config.options();
     let mut errors = 0;
 
@@ -127,18 +117,20 @@ fn handle_copy_to(app_config: AppConfig, matching_files: impl FileSource, dir: &
         return;
     }
 
-    for (from, to) in matching_files
-        .iter()
-        .filter_map(|file| make_from_to(file, dir))
-    {
+    let src_dir = matching_files.dir();
+    for src in matching_files.iter() {
+        let Ok(dest) = src.strip_prefix(src_dir).map(|p| dest_dir.join(p)) else {
+            continue;
+        };
+
         if options.verbose {
-            println!("Copying from {} to {}", from.display(), to.display());
+            println!("Copying from {} to {}", src.display(), dest.display());
         }
-        match to.parent() {
+        match dest.parent() {
             Some(parent) => {
                 // Create the parent directories if they don't exist
                 std::fs::create_dir_all(parent).expect("Failed to create directory");
-                if let Err(e) = std::fs::copy(from, to) {
+                if let Err(e) = std::fs::copy(src, dest) {
                     eprintln!("Error: {}", e);
                     errors += 1;
                 }
@@ -241,10 +233,10 @@ fn main() {
             handle_delete(app_cfg, matching_files);
         }
         Action::MoveTo(dir) => {
-            handle_move_to(app_cfg, matching_files, &dir);
+            handle_move_to(app_cfg, matching_files, dir);
         }
         Action::CopyTo(dir) => {
-            handle_copy_to(app_cfg, matching_files, &dir);
+            handle_copy_to(app_cfg, matching_files, dir);
         }
     }
 }
