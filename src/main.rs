@@ -2,7 +2,7 @@ use std::path::{Path, PathBuf};
 
 use clap::Parser;
 
-use delete_rest_lib::{Action, AppConfig, KeepFileError};
+use delete_rest_lib::{Action, AppConfig, KeepFileError, SelectedFiles};
 
 /// Deletes files that match the filter
 ///
@@ -180,7 +180,15 @@ fn main() {
     let filter = app_cfg.filter_config();
 
     // Step 3.1
-    let files = match app_cfg.read_path_recursive() {
+    let directory = match app_cfg.directory() {
+        Ok(directory) => directory,
+        Err(e) => {
+            eprintln!("Error: {}", e);
+            return;
+        }
+    };
+
+    let files : SelectedFiles = match directory.try_into() {
         Ok(files) => files,
         Err(e) => {
             eprintln!("Error: {}", e);
@@ -213,7 +221,7 @@ fn main() {
             return;
         }
     };
-    
+
     // Step 5
     let action = app_cfg.action();
     let matching_files = matching_files

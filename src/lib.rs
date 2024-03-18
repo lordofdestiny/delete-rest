@@ -11,6 +11,88 @@ use regex::Regex;
 use regex_macro::regex;
 use serde::{Deserialize, Serialize};
 
+#[derive(Clone)]
+pub struct SelectedDirectory(PathBuf);
+
+#[derive(Clone)]
+pub struct SelectedFiles {
+    pub dir: SelectedDirectory,
+    pub files: Vec<PathBuf>,
+}
+
+impl TryFrom<PathBuf> for SelectedDirectory {
+    type Error = std::io::Error;
+    fn try_from(path: PathBuf) -> Result<Self, Self::Error> {
+        if path.is_dir() {
+            Ok(SelectedDirectory(path))
+        } else {
+            Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "Not a directory",
+            ))
+        }
+    }
+}
+
+impl SelectedDirectory {
+    /// Get the path of all matching files
+    ///
+    /// This method returns a vector of all the matching files in the specified directory.
+    /// It uses the `path` field of the `AppConfig` struct to search for files.
+    ///
+    /// Directories are searched recursively.
+    ///
+    /// # Errors
+    ///
+    /// Errors are returned in the following cases, but not limited to:
+    ///
+    /// - If the specified directory does not exist
+    /// - If the specified directory is not readable
+    /// - If an I/O error occurs while reading the directory
+    /// - Path canonicalization fails
+    fn read_recursive_path(&self) -> std::io::Result<Vec<PathBuf>> {
+        let path = Path::new(&self.0);
+        // All found files
+        let mut files = Vec::new();
+        // Stack for recursive search
+        let mut stack: Vec<_> = path.read_dir()?.flat_map(Result::ok).collect();
+
+        // Iterate over the stack until it's empty
+        while let Some(entry) = stack.pop() {
+            if entry.path().is_dir() {
+                // If the entry is a directory, add its contents to the stack
+                stack.extend(entry.path().read_dir()?.flat_map(Result::ok));
+            } else {
+                // Else, add the file to the list of found files
+                files.push(entry.path().canonicalize()?);
+            }
+        }
+
+        Ok(files)
+    }
+}
+
+impl TryFrom<SelectedDirectory> for SelectedFiles {
+    type Error = std::io::Error;
+    fn try_from(selected: SelectedDirectory) -> Result<Self, Self::Error> {
+        let files = selected.read_recursive_path()?;
+        Ok(SelectedFiles {
+            dir: selected,
+            files,
+        })
+    }
+}
+
+impl SelectedFiles {
+    pub fn iter(&self) -> impl Iterator<Item = &PathBuf> + Clone {
+        self.files.iter()
+    }
+
+    pub fn len(&self) -> usize {
+        self.files.len()
+    }
+}
+
 /// Command line arguments for the delete-rest app
 ///
 /// This struct is used to parse command line arguments using the `clap` crate.
@@ -145,6 +227,11 @@ impl AppConfig {
         self.dry_run
     }
 
+    /// Get the directory to search for files
+    pub fn directory(&self) -> Result<SelectedDirectory, std::io::Error> {
+        SelectedDirectory::try_from(PathBuf::from(&self.path))
+    }
+
     /// Options for executin the action
     ///
     /// This method returns a tuple of booleans indicating whether the action should be performed in dry-run mode
@@ -182,42 +269,6 @@ impl AppConfig {
             (None, None, false) => Action::CopyTo(PathBuf::from("selected")),
             (_, _, true) => Action::Delete,
         }
-    }
-
-    /// Get the path of all matching files
-    ///
-    /// This method returns a vector of all the matching files in the specified directory.
-    /// It uses the `path` field of the `AppConfig` struct to search for files.
-    ///
-    /// Directories are searched recursively.
-    ///
-    /// # Errors
-    ///
-    /// Errors are returned in the following cases, but not limited to:
-    ///
-    /// - If the specified directory does not exist
-    /// - If the specified directory is not readable
-    /// - If an I/O error occurs while reading the directory
-    /// - Path canonicalization fails
-    pub fn read_path_recursive(&self) -> std::io::Result<Vec<PathBuf>> {
-        let path = Path::new(&self.path);
-        // All found files
-        let mut files = Vec::new();
-        // Stack for recursive search
-        let mut stack: Vec<_> = path.read_dir()?.flat_map(Result::ok).collect();
-
-        // Iterate over the stack until it's empty
-        while let Some(entry) = stack.pop() {
-            if entry.path().is_dir() {
-                // If the entry is a directory, add its contents to the stack
-                stack.extend(entry.path().read_dir()?.flat_map(Result::ok));
-            } else {
-                // Else, add the file to the list of found files
-                files.push(entry.path().canonicalize()?);
-            }
-        }
-
-        Ok(files)
     }
 
     /// Read the keep file
