@@ -111,6 +111,24 @@ pub enum Action {
     Delete,
 }
 
+impl Action {
+    /// Get the type of matcher this action requires
+    pub fn matcher_type(&self) -> KeepFileMatcherType {
+        use Action::*;
+        use KeepFileMatcherType::*;
+        match self {
+            Delete => Exclude,
+            MoveTo(_) | CopyTo(_) => Include,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct ExecutionOptions {
+    pub dry_run: bool,
+    pub verbose: bool,
+}
+
 impl AppConfig {
     /// Get the path of the keep file
     pub fn keepfile(&self) -> &str {
@@ -120,6 +138,24 @@ impl AppConfig {
     /// Should the detailed information be printed?
     pub fn verbose(&self) -> bool {
         self.verbose
+    }
+
+    /// Should the action be performed in dry-run mode?
+    pub fn dry_run(&self) -> bool {
+        self.dry_run
+    }
+
+    /// Options for executin the action
+    ///
+    /// This method returns a tuple of booleans indicating whether the action should be performed in dry-run mode
+    /// and whether detailed information should be printed.
+    ///
+    /// The first element is the dry-run mode, and the second element is the verbose mode.
+    pub fn options(&self) -> ExecutionOptions {
+        ExecutionOptions {
+            dry_run: self.dry_run,
+            verbose: self.verbose,
+        }
     }
 
     /// Derive the action to perform on matching files
@@ -132,7 +168,7 @@ impl AppConfig {
     /// - If `move_to` is specified, the action is `MoveTo`.
     /// - If no action is specified, the action is `CopyTo`, with the default directory being `./selected`.
     /// - If `delete` is specified, the action is `Delete`.
-    pub fn action(&self) -> (Action, bool) {
+    pub fn action(&self) -> Action {
         let Self {
             dry_run,
             delete,
@@ -140,15 +176,13 @@ impl AppConfig {
             copy_to,
             ..
         } = self;
-        (
-            match (move_to, copy_to, delete) {
-                (_, Some(path), _) => Action::CopyTo(path.clone()),
-                (Some(path), _, _) => Action::MoveTo(path.clone()),
-                (None, None, false) => Action::CopyTo("./selected".to_string()),
-                (_, _, true) => Action::Delete,
-            },
-            *dry_run,
-        )
+
+        match (move_to, copy_to, delete) {
+            (_, Some(path), _) => Action::CopyTo(path.clone()),
+            (Some(path), _, _) => Action::MoveTo(path.clone()),
+            (None, None, false) => Action::CopyTo("./selected".to_string()),
+            (_, _, true) => Action::Delete,
+        }
     }
 
     /// Get the path of all matching files
@@ -166,7 +200,7 @@ impl AppConfig {
     /// - If the specified directory is not readable
     /// - If an I/O error occurs while reading the directory
     /// - Path canonicalization fails
-    pub fn all_files_in_path(&self) -> std::io::Result<Vec<PathBuf>> {
+    pub fn read_path_recursive(&self) -> std::io::Result<Vec<PathBuf>> {
         let path = Path::new(&self.path);
         // All found files
         let mut files = Vec::new();

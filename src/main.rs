@@ -2,7 +2,6 @@ use std::path::{Path, PathBuf};
 
 use clap::Parser;
 
-use delete_rest_lib::KeepFileMatcherType::{Exclude, Include};
 use delete_rest_lib::{Action, AppConfig, KeepFileError};
 
 /// Deletes files that match the filter
@@ -14,13 +13,15 @@ use delete_rest_lib::{Action, AppConfig, KeepFileError};
 /// - `matching_files` - an iterator over the files to be deleted
 /// - `dry_run` - if true, the files will not be deleted
 /// - `verbose` - if true, the files will be printed before being deleted
-fn handle_delete<'a>(matching_files: impl Iterator<Item = &'a Path>, dry_run: bool, verbose: bool) {
+fn handle_delete<'a>(app_config: AppConfig, matching_files: impl Iterator<Item = &'a Path>) {
+    let options = app_config.options();
     let mut errors = 0;
+    
     for file in matching_files {
-        if verbose {
+        if options.verbose {
             println!("Deleting: {}", file.display());
         }
-        if dry_run {
+        if options.dry_run {
             continue;
         }
         if let Err(e) = std::fs::remove_file(file) {
@@ -28,6 +29,7 @@ fn handle_delete<'a>(matching_files: impl Iterator<Item = &'a Path>, dry_run: bo
             errors += 1;
         }
     }
+
     if errors > 0 {
         eprintln!("{} errors occurred", errors);
     }
@@ -58,17 +60,17 @@ pub fn make_from_to<'a>(file: &'a Path, dir: &str) -> Option<(&'a Path, PathBuf)
 /// - `dry_run` - if true, the files will not be moved
 /// - `verbose` - if true, the files will be printed before being moved
 fn handle_move_to<'a>(
+    app_config: AppConfig,
     matching_files: impl Iterator<Item = &'a Path>,
     dir: &str,
-    dry_run: bool,
-    verbose: bool,
 ) {
+    let options = app_config.options();
     let mut errors = 0;
     for (from, to) in matching_files.filter_map(|file| make_from_to(file, dir)) {
-        if verbose {
+        if options.verbose {
             println!("Moving from {} to {}", from.display(), to.display());
         }
-        if dry_run {
+        if options.dry_run {
             continue;
         }
         match to.parent() {
@@ -102,17 +104,17 @@ fn handle_move_to<'a>(
 /// - `dry_run` - if true, the files will not be copied
 /// - `verbose` - if true, the files will be printed before being copied
 fn handle_copy_to<'a>(
+    app_config: AppConfig,
     matching_files: impl Iterator<Item = &'a Path>,
     dir: &str,
-    dry_run: bool,
-    verbose: bool,
 ) {
+    let options= app_config.options();
     let mut errors = 0;
     for (from, to) in matching_files.filter_map(|file| make_from_to(file, dir)) {
-        if verbose {
+        if options.verbose {
             println!("Copying from {} to {}", from.display(), to.display());
         }
-        if dry_run {
+        if options.dry_run {
             continue;
         }
         match to.parent() {
@@ -150,8 +152,6 @@ fn handle_copy_to<'a>(
 ///     2. Filter the files that match the filter </li>
 /// 4. Get the file names from the keep file
 /// 5. Process the files ( separate files to keep and files to delete )
-///     1. Extract the action from the configuration
-///     2. Get the files to keep
 /// 6. Execute the action
 fn main() {
     // Step 1
@@ -166,14 +166,14 @@ fn main() {
     let filter = app_cfg.filter_config();
 
     // Step 3.1
-    let files = match app_cfg.all_files_in_path() {
+    let files = match app_cfg.read_path_recursive() {
         Ok(files) => files,
         Err(e) => {
             eprintln!("Error: {}", e);
             return;
         }
     };
-    
+
     // Step 3.2
     let matching_files = files.iter().filter(filter.into_matcher());
     let total_files_cnt = files.len();
@@ -199,17 +199,11 @@ fn main() {
             return;
         }
     };
-    
-    // Step 5.1
+
+    // Step 5
     let action = app_cfg.action();
-    let keep_type = match action.0 {
-        Action::Delete => Exclude,
-        _ => Include,
-    };
-    
-    // Step 5.2
     let matching_files = matching_files
-        .filter(keep.into_matcher(keep_type))
+        .filter(keep.into_matcher(action.matcher_type()))
         .map(|path| path.as_path());
     let should_keep_cnt = matching_files.clone().count();
 
@@ -217,14 +211,14 @@ fn main() {
 
     // Step 6
     match action {
-        (Action::Delete, dry_run) => {
-            handle_delete(matching_files, dry_run, app_cfg.verbose());
+        Action::Delete => {
+            handle_delete(app_cfg, matching_files);
         }
-        (Action::MoveTo(dir), dry_run) => {
-            handle_move_to(matching_files, &dir, dry_run, app_cfg.verbose());
+        Action::MoveTo(dir) => {
+            handle_move_to(app_cfg, matching_files, &dir);
         }
-        (Action::CopyTo(dir), dry_run) => {
-            handle_copy_to(matching_files, &dir, dry_run, app_cfg.verbose());
+        Action::CopyTo(dir) => {
+            handle_copy_to(app_cfg, matching_files, &dir);
         }
     }
 }
