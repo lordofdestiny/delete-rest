@@ -2,7 +2,7 @@ use std::path::{Path, PathBuf};
 
 use clap::Parser;
 
-use delete_rest_lib::{Action, AppConfig, KeepFileError, SelectedFiles};
+use delete_rest_lib::{Action, AppConfig, FileSource, KeepFileError, SelectedFiles};
 
 /// Deletes files that match the filter
 ///
@@ -13,18 +13,20 @@ use delete_rest_lib::{Action, AppConfig, KeepFileError, SelectedFiles};
 /// - `matching_files` - an iterator over the files to be deleted
 /// - `dry_run` - if true, the files will not be deleted
 /// - `verbose` - if true, the files will be printed before being deleted
-fn handle_delete<'a>(app_config: AppConfig, matching_files: impl Iterator<Item = &'a Path>) {
+fn handle_delete(app_config: AppConfig, matching_files: impl FileSource) {
     let options = app_config.options();
     let mut errors = 0;
 
     if options.dry_run {
         if options.verbose {
-            matching_files.for_each(|file: &Path| println!("Deleting: {}", file.display()));
+            matching_files
+                .iter()
+                .for_each(|file| println!("Deleting: {}", file.display()));
         }
         return;
     }
-    
-    for file in matching_files {
+
+    for file in matching_files.iter() {
         if options.verbose {
             println!("Deleting: {}", file.display());
         }
@@ -33,7 +35,6 @@ fn handle_delete<'a>(app_config: AppConfig, matching_files: impl Iterator<Item =
             errors += 1;
         }
     }
-    
 
     if errors > 0 {
         eprintln!("{} errors occurred", errors);
@@ -63,22 +64,23 @@ pub fn make_from_to<'a>(file: &'a Path, dir: &Path) -> Option<(&'a Path, PathBuf
 /// - `dir` - the directory to move the files to
 /// - `dry_run` - if true, the files will not be moved
 /// - `verbose` - if true, the files will be printed before being moved
-fn handle_move_to<'a>(
-    app_config: AppConfig,
-    matching_files: impl Iterator<Item = &'a Path>,
-    dir: &Path,
-) {
+fn handle_move_to(app_config: AppConfig, matching_files: impl FileSource, dir: &Path) {
     let options = app_config.options();
     let mut errors = 0;
 
     if options.dry_run {
         if options.verbose {
-            matching_files.for_each(|file: &Path| println!("Moving: {}", file.display()));
+            matching_files
+                .iter()
+                .for_each(|file| println!("Moving: {}", file.display()));
         }
         return;
     }
 
-    for (from, to) in matching_files.filter_map(|file| make_from_to(file, dir)) {
+    for (from, to) in matching_files
+        .iter()
+        .filter_map(|file| make_from_to(file, dir))
+    {
         if options.verbose {
             println!("Moving from {} to {}", from.display(), to.display());
         }
@@ -112,22 +114,23 @@ fn handle_move_to<'a>(
 /// - `dir` - the directory to copy the files to
 /// - `dry_run` - if true, the files will not be copied
 /// - `verbose` - if true, the files will be printed before being copied
-fn handle_copy_to<'a>(
-    app_config: AppConfig,
-    matching_files: impl Iterator<Item = &'a Path>,
-    dir: &Path,
-) {
+fn handle_copy_to(app_config: AppConfig, matching_files: impl FileSource, dir: &Path) {
     let options = app_config.options();
     let mut errors = 0;
 
     if options.dry_run {
         if options.verbose {
-            matching_files.for_each(|file: &Path| println!("Copying: {}", file.display()));
+            matching_files
+                .iter()
+                .for_each(|file| println!("Copying: {}", file.display()));
         }
         return;
     }
 
-    for (from, to) in matching_files.filter_map(|file| make_from_to(file, dir)) {
+    for (from, to) in matching_files
+        .iter()
+        .filter_map(|file| make_from_to(file, dir))
+    {
         if options.verbose {
             println!("Copying from {} to {}", from.display(), to.display());
         }
@@ -188,7 +191,7 @@ fn main() {
         }
     };
 
-    let files : SelectedFiles = match directory.try_into() {
+    let files: SelectedFiles = match directory.try_into() {
         Ok(files) => files,
         Err(e) => {
             eprintln!("Error: {}", e);
@@ -197,12 +200,12 @@ fn main() {
     };
 
     // Step 3.2
-    let matching_files = files.iter().filter(filter.into_matcher());
-    let total_files_cnt = files.len();
-    let matching_files_cnt = matching_files.clone().count();
+    let total_count = files.len();
+    let matching_files = files.filter_by(filter.into_matcher());
+    let matching_count = matching_files.count();
 
     if app_cfg.verbose() {
-        println!("Matching files: {matching_files_cnt}/{total_files_cnt}");
+        println!("Matching files: {matching_count}/{total_count}");
     }
 
     // Step 4
@@ -224,12 +227,13 @@ fn main() {
 
     // Step 5
     let action = app_cfg.action();
-    let matching_files = matching_files
-        .filter(keep.into_matcher(action.matcher_type()))
-        .map(|path| path.as_path());
-    let should_keep_cnt = matching_files.clone().count();
+    let matching_files = matching_files.filter_by(keep.into_matcher(action.matcher_type()));
 
-    println!("Keeping files: {should_keep_cnt}/{matching_files_cnt}");
+    let kept_count = matching_files.clone().count();
+
+    if app_cfg.verbose() {
+        println!("Keeping files: {kept_count}/{matching_count}");
+    }
 
     // Step 6
     match action {

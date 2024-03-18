@@ -66,7 +66,6 @@ impl SelectedDirectory {
     }
 }
 
-
 #[derive(Clone)]
 pub struct SelectedFiles {
     pub dir: SelectedDirectory,
@@ -83,7 +82,6 @@ impl SelectedFiles {
     }
 }
 
-
 impl TryFrom<SelectedDirectory> for SelectedFiles {
     type Error = std::io::Error;
     fn try_from(selected: SelectedDirectory) -> Result<Self, Self::Error> {
@@ -95,6 +93,52 @@ impl TryFrom<SelectedDirectory> for SelectedFiles {
     }
 }
 
+pub trait FileSource {
+    fn files(&self) -> impl Iterator<Item = &PathBuf> + Clone;
+
+    fn iter(&self) -> impl Iterator<Item = &PathBuf> + Clone {
+        self.files()
+    }
+
+    fn filter_by<F>(self, matcher: F) -> FilteredFiles<Self, F>
+    where
+        Self: Sized,
+        F: Fn(&&PathBuf) -> bool + Clone,
+    {
+        FilteredFiles {
+            source: self,
+            matcher,
+        }
+    }
+}
+
+impl FileSource for SelectedFiles {
+    fn files(&self) -> impl Iterator<Item = &PathBuf> + Clone {
+        self.files.iter()
+    }
+}
+
+#[derive(Clone)]
+pub struct FilteredFiles<F: FileSource, T: Fn(&&PathBuf) -> bool + Clone> {
+    source: F,
+    matcher: T,
+}
+
+impl<F: FileSource, T: Fn(&&PathBuf) -> bool + Clone> FilteredFiles<F, T> {
+    pub fn iter(&self) -> impl Iterator<Item = &PathBuf> + Clone {
+        self.source.files().filter(self.matcher.clone())
+    }
+
+    pub fn count(&self) -> usize {
+        self.iter().count()
+    }
+}
+
+impl<F: FileSource, T: Fn(&&PathBuf) -> bool + Clone> FileSource for FilteredFiles<F, T> {
+    fn files(&self) -> impl Iterator<Item = &PathBuf> + Clone {
+        self.iter()
+    }
+}
 
 /// Command line arguments for the delete-rest app
 ///
