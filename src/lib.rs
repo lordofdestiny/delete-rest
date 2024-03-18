@@ -467,31 +467,12 @@ impl FileFilter {
     /// and is cloneable. This allows the matcher function to be used in multiple places without cloning the `FileFilter` struct,
     /// and allows cloning of the iterators where the matcher function is used.
     pub fn into_matcher(self) -> impl Fn(&&PathBuf) -> bool + Clone {
-        let Self {
-            extensions,
-            formats,
-            ..
-        } = self;
-        struct Inner {
-            extensions: Rc<RefCell<Vec<String>>>,
-            format: Rc<RefCell<Vec<Format>>>,
-        }
-        impl Clone for Inner {
-            fn clone(&self) -> Self {
-                Self {
-                    extensions: self.extensions.clone(),
-                    format: self.format.clone(),
-                }
-            }
-        }
+        let extensions = Rc::new(RefCell::new(self.extensions));
+        let formats = Rc::new(RefCell::new(self.formats));
 
-        let inner = Inner {
-            extensions: Rc::new(RefCell::new(extensions)),
-            format: Rc::new(RefCell::new(formats)),
-        };
         move |path| {
-            let extensions = inner.extensions.borrow();
-            let format = inner.format.borrow();
+            let extensions = extensions.borrow();
+            let format = formats.borrow();
             Self::matches_impl(&format, &extensions, path)
         }
     }
