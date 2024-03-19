@@ -240,10 +240,8 @@ pub struct AppConfig {
 /// It is calculated from the command line arguments.
 #[derive(Debug, Clone)]
 pub enum Action {
-    /// Copy matching files to the specified directory
-    MoveTo(PathBuf),
-    /// Move matching files to the specified directory
-    CopyTo(PathBuf),
+    /// Copy or move matching files to the specified directory
+    MoveOrCopyTo(MoveOrCopy, PathBuf),
     /// Delete non-matching files
     Delete,
 }
@@ -254,12 +252,13 @@ impl Action {
         use Action::*;
         use KeepFileMatcherType::*;
         match self {
+            MoveOrCopyTo(_, _) => Include,
             Delete => Exclude,
-            MoveTo(_) | CopyTo(_) => Include,
         }
     }
 }
 
+#[derive(Debug, Clone)]
 pub enum MoveOrCopy {
     Move,
     Copy,
@@ -353,11 +352,13 @@ impl AppConfig {
             ..
         } = self;
 
+        use Action::*;
+        use MoveOrCopy::*;
         match (move_to, copy_to, delete) {
-            (_, Some(path), _) => Action::CopyTo(PathBuf::from(path)),
-            (Some(path), _, _) => Action::MoveTo(PathBuf::from(path)),
-            (None, None, false) => Action::CopyTo(PathBuf::from("selected")),
-            (_, _, true) => Action::Delete,
+            (_, Some(path), _) => MoveOrCopyTo(Copy, PathBuf::from(path)),
+            (Some(path), _, _) => MoveOrCopyTo(Move, PathBuf::from(path)),
+            (None, None, false) => MoveOrCopyTo(Copy, PathBuf::from("selected")),
+            (_, _, true) => Delete,
         }
     }
 

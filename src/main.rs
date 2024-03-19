@@ -174,11 +174,8 @@ fn main() {
         Action::Delete => {
             handle_delete(app_cfg, matching_files);
         }
-        Action::MoveTo(dir) => {
-            handle_move_or_copy(MoveOrCopy::Move, app_cfg, matching_files, dir);
-        }
-        Action::CopyTo(dir) => {
-            handle_move_or_copy(MoveOrCopy::Copy, app_cfg, matching_files, dir);
+        Action::MoveOrCopyTo(op, dir) => {
+            handle_move_or_copy(op, app_cfg, matching_files, dir);
         }
     }
 }
