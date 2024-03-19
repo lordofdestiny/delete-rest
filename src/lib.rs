@@ -1,7 +1,7 @@
-use std::cell::RefCell;
 use std::clone::Clone;
 use std::fmt::{Debug, Display};
 use std::io::BufRead;
+use std::ops::Deref;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
@@ -10,6 +10,148 @@ use itertools::Itertools;
 use regex::Regex;
 use regex_macro::regex;
 use serde::{Deserialize, Serialize};
+
+/// Selected source directory to seek files from
+#[derive(Clone)]
+pub struct SelectedDirectory(PathBuf);
+
+impl TryFrom<PathBuf> for SelectedDirectory {
+    type Error = std::io::Error;
+    fn try_from(path: PathBuf) -> Result<Self, Self::Error> {
+        if path.is_dir() {
+            path.canonicalize().map(Self)
+        } else {
+            Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "Not a directory",
+            ))
+        }
+    }
+}
+
+impl SelectedDirectory {
+    /// Get the path of all matching files
+    ///
+    /// This method returns a vector of all the matching files in the specified directory.
+    /// It uses the `path` field of the `AppConfig` struct to search for files.
+    ///
+    /// Directories are searched recursively.
+    ///
+    /// # Errors
+    ///
+    /// Errors are returned in the following cases, but not limited to:
+    ///
+    /// - If the specified directory does not exist
+    /// - If the specified directory is not readable
+    /// - If an I/O error occurs while reading the directory
+    /// - Path canonicalization fails
+    fn read_recursive_path(&self) -> std::io::Result<Vec<PathBuf>> {
+        let path = Path::new(&self.0);
+        // All found files
+        let mut files = Vec::new();
+        // Stack for recursive search
+        let mut stack: Vec<_> = path.read_dir()?.flat_map(Result::ok).collect();
+
+        // Iterate over the stack until it's empty
+        while let Some(entry) = stack.pop() {
+            if entry.path().is_dir() {
+                // If the entry is a directory, add its contents to the stack
+                stack.extend(entry.path().read_dir()?.flat_map(Result::ok));
+            } else {
+                // Else, add the file to the list of found files
+                files.push(entry.path().canonicalize()?);
+            }
+        }
+
+        Ok(files)
+    }
+}
+
+/// Files selected from a directory
+#[derive(Clone)]
+pub struct SelectedFiles {
+    /// Directory the files where selected from
+    pub dir: SelectedDirectory,
+    /// Selected files' paths
+    pub files: Vec<PathBuf>,
+}
+
+impl TryFrom<SelectedDirectory> for SelectedFiles {
+    type Error = std::io::Error;
+    fn try_from(selected: SelectedDirectory) -> Result<Self, Self::Error> {
+        let files = selected.read_recursive_path()?;
+        Ok(SelectedFiles {
+            dir: selected,
+            files,
+        })
+    }
+}
+
+pub trait FileSource {
+    /// Get the path of the directory files are located in
+    fn dir(&self) -> &Path;
+
+    /// Get an iterator over the files in the source
+    fn iter(&self) -> impl Iterator<Item = &PathBuf> + Clone;
+    
+    /// Get the number of files in the source
+    /// 
+    /// This method is linear in time complexity
+    fn count(&self) -> usize {
+        self.iter().count()
+    }
+    
+    /// Filter the files in the source, using the specified filter
+    /// 
+    /// This method returns a new `FilteredFiles` struct that contains the files that match the specified filter
+    fn filter_by(self, filter: Rc<dyn Fn(&&PathBuf) -> bool>) -> FilteredFiles<Self>
+    where
+        Self: Sized,
+    {
+        FilteredFiles {
+            source: self,
+            matcher: filter,
+        }
+    }
+}
+
+impl FileSource for SelectedFiles {
+    fn dir(&self) -> &Path {
+        &self.dir.0
+    }
+
+    fn iter(&self) -> impl Iterator<Item = &PathBuf> + Clone {
+        self.files.iter()
+    }
+}
+
+/// Files filtered by a matcher function
+/// 
+/// This struct represents files that have been filtered by a matcher function.
+/// 
+/// It is used to chain multiple filters together
+/// 
+/// Files are filter on demand, so the filter is not applied until the files are iterated over
+#[derive(Clone)]
+pub struct FilteredFiles<F: FileSource> {
+    source: F,
+    matcher: Rc<dyn Fn(&&PathBuf) -> bool>,
+}
+
+impl<F: FileSource> FilteredFiles<F> {
+    pub fn iter(&self) -> impl Iterator<Item = &PathBuf> + Clone {
+        self.source.iter().filter(self.matcher.deref())
+    }
+}
+
+impl<F: FileSource> FileSource for FilteredFiles<F> {
+    fn dir(&self) -> &Path {
+        self.source.dir()
+    }
+    fn iter(&self) -> impl Iterator<Item = &PathBuf> + Clone {
+        self.source.iter()
+    }
+}
 
 /// Command line arguments for the delete-rest app
 ///
@@ -103,29 +245,68 @@ pub struct AppConfig {
 /// It is calculated from the command line arguments.
 #[derive(Debug, Clone)]
 pub enum Action {
-    /// Copy matching files to the specified directory
-    MoveTo(PathBuf),
-    /// Move matching files to the specified directory
-    CopyTo(PathBuf),
+    /// Copy or move matching files to the specified directory
+    MoveOrCopyTo(MoveOrCopy, PathBuf),
     /// Delete non-matching files
     Delete,
 }
 
-impl Action {
-    /// Get the type of matcher this action requires
-    pub fn matcher_type(&self) -> KeepFileMatcherType {
-        use Action::*;
-        use KeepFileMatcherType::*;
+/// The action to perform on matching files, as a move or copy operation
+#[derive(Debug, Clone)]
+pub enum MoveOrCopy {
+    Move,
+    Copy,
+}
+
+impl MoveOrCopy {
+    /// Get a description of the operation
+    pub fn description(&self) -> &str {
         match self {
-            Delete => Exclude,
-            MoveTo(_) | CopyTo(_) => Include,
+            MoveOrCopy::Move => "moved",
+            MoveOrCopy::Copy => "copied",
+        }
+    }
+
+    /// Perform the move or copy operation
+    /// 
+    /// This method moves or copies a file from the `from` path to the `to` path.
+    /// 
+    /// # Arguments
+    /// - `from` - the source path
+    /// - `to` - the destination path
+    /// 
+    /// # Errors
+    /// Possible errors include:
+    /// - If the parent directory of the destination path does not exist
+    /// - If the parent directory of the destination path is not writable
+    pub fn move_or_copy<P: AsRef<Path>, Q: AsRef<Path>>(
+        &self,
+        from: P,
+        to: Q,
+    ) -> Result<(), std::io::Error> {
+        match to.as_ref().parent() {
+            Some(parent) => {
+                // Create the parent directories if they don't exist
+                std::fs::create_dir_all(parent)?;
+                match self {
+                    MoveOrCopy::Move => std::fs::rename(from, to),
+                    MoveOrCopy::Copy => std::fs::copy(from, to).map(|_| ()),
+                }
+            }
+            None => Err(std::io::Error::new(
+                std::io::ErrorKind::Other,
+                "Failed to get parent directory",
+            )),
         }
     }
 }
 
+/// Options for executing the action
 #[derive(Debug, Clone)]
 pub struct ExecutionOptions {
+    /// Should the action be performed in dry-run mode?
     pub dry_run: bool,
+    /// Should the detailed information be printed?
     pub verbose: bool,
 }
 
@@ -143,6 +324,11 @@ impl AppConfig {
     /// Should the action be performed in dry-run mode?
     pub fn dry_run(&self) -> bool {
         self.dry_run
+    }
+
+    /// Get the directory to search for files
+    pub fn directory(&self) -> Result<SelectedDirectory, std::io::Error> {
+        SelectedDirectory::try_from(PathBuf::from(&self.path))
     }
 
     /// Options for executin the action
@@ -176,48 +362,14 @@ impl AppConfig {
             ..
         } = self;
 
+        use Action::*;
+        use MoveOrCopy::*;
         match (move_to, copy_to, delete) {
-            (_, Some(path), _) => Action::CopyTo(PathBuf::from(path)),
-            (Some(path), _, _) => Action::MoveTo(PathBuf::from(path)),
-            (None, None, false) => Action::CopyTo(PathBuf::from("selected")),
-            (_, _, true) => Action::Delete,
+            (_, Some(path), _) => MoveOrCopyTo(Copy, PathBuf::from(path)),
+            (Some(path), _, _) => MoveOrCopyTo(Move, PathBuf::from(path)),
+            (None, None, false) => MoveOrCopyTo(Copy, PathBuf::from("selected")),
+            (_, _, true) => Delete,
         }
-    }
-
-    /// Get the path of all matching files
-    ///
-    /// This method returns a vector of all the matching files in the specified directory.
-    /// It uses the `path` field of the `AppConfig` struct to search for files.
-    ///
-    /// Directories are searched recursively.
-    ///
-    /// # Errors
-    ///
-    /// Errors are returned in the following cases, but not limited to:
-    ///
-    /// - If the specified directory does not exist
-    /// - If the specified directory is not readable
-    /// - If an I/O error occurs while reading the directory
-    /// - Path canonicalization fails
-    pub fn read_path_recursive(&self) -> std::io::Result<Vec<PathBuf>> {
-        let path = Path::new(&self.path);
-        // All found files
-        let mut files = Vec::new();
-        // Stack for recursive search
-        let mut stack: Vec<_> = path.read_dir()?.flat_map(Result::ok).collect();
-
-        // Iterate over the stack until it's empty
-        while let Some(entry) = stack.pop() {
-            if entry.path().is_dir() {
-                // If the entry is a directory, add its contents to the stack
-                stack.extend(entry.path().read_dir()?.flat_map(Result::ok));
-            } else {
-                // Else, add the file to the list of found files
-                files.push(entry.path().canonicalize()?);
-            }
-        }
-
-        Ok(files)
     }
 
     /// Read the keep file
@@ -363,41 +515,23 @@ impl FileFilter {
         FileFilter::try_load(config_path).unwrap_or_default()
     }
 
-    /// Check if a file name has one of the specified extensions
-    fn has_extension_impl<P: AsRef<Path>>(extensions: &[String], path: P) -> bool {
-        let path = path.as_ref();
-        match path.extension() {
-            Some(ext) => match ext.to_str() {
-                Some(ext) => extensions.contains(&ext.to_string()),
-                None => false,
-            },
-            None => false,
-        }
-    }
-
     /// Check if a file name has one of the configured extensions
     pub fn has_extension<P: AsRef<Path>>(&self, path: P) -> bool {
-        Self::has_extension_impl(&self.extensions, path)
-    }
+        let path = path.as_ref();
 
-    /// Check if a file name has one of the formats
-    fn has_format_impl<P: AsRef<Path>>(formats: &[Format], extensions: &[String], path: P) -> bool {
-        formats
-            .iter()
-            .filter_map(|f| f.matches(extensions, path.as_ref()))
-            .any(|x| x)
+        path.extension()
+            .and_then(|ext| ext.to_str())
+            .map(|ext| ext.to_string())
+            .map(|ext| self.extensions.contains(&ext))
+            .unwrap_or(false)
     }
 
     /// Check if a file name has one of the configured formats
     pub fn has_format<P: AsRef<Path>>(&self, path: P) -> bool {
-        Self::has_format_impl(&self.formats, &self.extensions, path)
-    }
-
-    /// Check if a file name matches the one of the formats and has one of the extensions
-    fn matches_impl<P: AsRef<Path>>(formats: &[Format], extensions: &[String], path: P) -> bool {
-        let path = path.as_ref();
-        Self::has_extension_impl(extensions, path)
-            && Self::has_format_impl(formats, extensions, path)
+        self.formats
+            .iter()
+            .filter_map(|f| f.matches(&self.extensions, path.as_ref()))
+            .any(|x| x)
     }
 
     /// Check if a file name matches one of the configured formats and has one of the configured extensions
@@ -415,34 +549,8 @@ impl FileFilter {
     /// The matcher function is a closure that captures the `extensions` and `formats` fields of the `FileFilter` struct,
     /// and is cloneable. This allows the matcher function to be used in multiple places without cloning the `FileFilter` struct,
     /// and allows cloning of the iterators where the matcher function is used.
-    pub fn into_matcher(self) -> impl Fn(&&PathBuf) -> bool + Clone {
-        let Self {
-            extensions,
-            formats,
-            ..
-        } = self;
-        struct Inner {
-            extensions: Rc<RefCell<Vec<String>>>,
-            format: Rc<RefCell<Vec<Format>>>,
-        }
-        impl Clone for Inner {
-            fn clone(&self) -> Self {
-                Self {
-                    extensions: self.extensions.clone(),
-                    format: self.format.clone(),
-                }
-            }
-        }
-
-        let inner = Inner {
-            extensions: Rc::new(RefCell::new(extensions)),
-            format: Rc::new(RefCell::new(formats)),
-        };
-        move |path| {
-            let extensions = inner.extensions.borrow();
-            let format = inner.format.borrow();
-            Self::matches_impl(&format, &extensions, path)
-        }
+    pub fn into_matcher(self) -> Rc<dyn Fn(&&PathBuf) -> bool> {
+        Rc::new(move |path| self.matches(path))
     }
 }
 
@@ -497,15 +605,6 @@ impl IntoIterator for KeepFile {
     }
 }
 
-/// The type of matcher to generate from the keep file
-#[derive(Debug, Copy, Clone)]
-pub enum KeepFileMatcherType {
-    /// Include files that match the numbers in the keep file
-    Include,
-    /// Exclude files that match the numbers in the keep file
-    Exclude,
-}
-
 impl KeepFile {
     /// Get an iterator over the list of numbers to keep
     pub fn iter(&self) -> std::slice::Iter<KeepFileLine> {
@@ -528,34 +627,46 @@ impl KeepFile {
             .map_or(false, |m: u32| m == num)
     }
 
-    /// Convert the keep file into a matcher function
+    /// Convert the keep file into an inclusive filter
     ///
     /// This method converts the keep file into a matcher function that can be used to filter files.
+    /// Filter will allow files that were found in the original match file
     ///
-    /// The matcher function takes a reference to a `PathBuf` and returns a boolean indicating whether the file should be kept.
+    /// The filter function takes a reference to a `PathBuf` and returns a boolean indicating whether the file should be kept.
     ///
-    /// The matcher function is a closure that captures the `lines` field of the `KeepFile` struct,
-    /// and is cloneable. This allows the matcher function to be used in multiple places without cloning the `KeepFile` struct,
+    /// The filter is a closure that captures the `lines` field of the `KeepFile` struct,
+    /// and is cloneable. This allows the filter to be used in multiple places without cloning the `KeepFile` struct,
     /// and allows cloning of the iterators where the matcher function is used.
-    pub fn into_matcher(self, mtype: KeepFileMatcherType) -> impl Fn(&&PathBuf) -> bool + Clone {
-        let lines = Rc::new(RefCell::new(self.lines));
-        move |path| {
-            // Get the file name, exit early if it doesn't exist
+    pub fn into_inclusion_matcher(self) -> Rc<dyn Fn(&&PathBuf) -> bool> {
+        Rc::new(move |path| {
             let Some(filename) = path.file_name().and_then(|f| f.to_str()) else {
                 return false;
             };
-            use KeepFileMatcherType::*;
-            match mtype {
-                Include => lines
-                    .borrow()
-                    .iter()
-                    .any(|KeepFileLine(num)| Self::matches_number(filename, *num)),
-                Exclude => lines
-                    .borrow()
-                    .iter()
-                    .all(|KeepFileLine(num)| !Self::matches_number(filename, *num)),
-            }
-        }
+            self.lines
+                .iter()
+                .any(|KeepFileLine(num)| Self::matches_number(filename, *num))
+        })
+    }
+
+    /// Convert the keep file into an inclusive filter
+    ///
+    /// This method converts the keep file into a matcher function that can be used to filter files.
+    /// Filter will allow files that were not found in the original match file
+    ///
+    /// The filter function takes a reference to a `PathBuf` and returns a boolean indicating whether the file should be kept.
+    ///
+    /// The filter is a closure that captures the `lines` field of the `KeepFile` struct,
+    /// and is cloneable. This allows the filter to be used in multiple places without cloning the `KeepFile` struct,
+    /// and allows cloning of the iterators where the matcher function is used.
+    pub fn into_exclusion_matcher(self) -> Rc<dyn Fn(&&PathBuf) -> bool> {
+        Rc::new(move |path| {
+            let Some(filename) = path.file_name().and_then(|f| f.to_str()) else {
+                return false;
+            };
+            self.lines
+                .iter()
+                .all(|KeepFileLine(num)| !Self::matches_number(filename, *num))
+        })
     }
 }
 
