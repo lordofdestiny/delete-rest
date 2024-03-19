@@ -161,10 +161,12 @@ fn main() {
 
     // Step 5
     let action = app_cfg.action();
-    let matching_files = matching_files.filter_by(keep.into_matcher(action.matcher_type()));
+    let matching_files = matching_files.filter_by(match action {
+        Action::Delete => keep.into_exclusion_matcher(),
+        Action::MoveOrCopyTo(_, _) => keep.into_inclusion_matcher(),
+    });
 
     let kept_count = matching_files.clone().count();
-
     if app_cfg.verbose() {
         println!("Keeping files: {kept_count}/{matching_count}");
     }

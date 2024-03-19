@@ -1,7 +1,7 @@
-use std::cell::RefCell;
 use std::clone::Clone;
 use std::fmt::{Debug, Display};
 use std::io::BufRead;
+use std::ops::Deref;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
@@ -102,10 +102,9 @@ pub trait FileSource {
         self.files()
     }
 
-    fn filter_by<F>(self, matcher: F) -> FilteredFiles<Self, F>
+    fn filter_by(self, matcher: Rc<dyn Fn(&&PathBuf) -> bool>) -> FilteredFiles<Self>
     where
         Self: Sized,
-        F: Fn(&&PathBuf) -> bool + Clone,
     {
         FilteredFiles {
             source: self,
@@ -124,14 +123,14 @@ impl FileSource for SelectedFiles {
 }
 
 #[derive(Clone)]
-pub struct FilteredFiles<F: FileSource, T: Fn(&&PathBuf) -> bool + Clone> {
+pub struct FilteredFiles<F: FileSource> {
     source: F,
-    matcher: T,
+    matcher: Rc<dyn Fn(&&PathBuf) -> bool>,
 }
 
-impl<F: FileSource, T: Fn(&&PathBuf) -> bool + Clone> FilteredFiles<F, T> {
+impl<F: FileSource> FilteredFiles<F> {
     pub fn iter(&self) -> impl Iterator<Item = &PathBuf> + Clone {
-        self.source.files().filter(self.matcher.clone())
+        self.source.files().filter(self.matcher.deref().clone())
     }
 
     pub fn count(&self) -> usize {
@@ -139,7 +138,7 @@ impl<F: FileSource, T: Fn(&&PathBuf) -> bool + Clone> FilteredFiles<F, T> {
     }
 }
 
-impl<F: FileSource, T: Fn(&&PathBuf) -> bool + Clone> FileSource for FilteredFiles<F, T> {
+impl<F: FileSource> FileSource for FilteredFiles<F> {
     fn dir(&self) -> &Path {
         self.source.dir()
     }
@@ -244,18 +243,6 @@ pub enum Action {
     MoveOrCopyTo(MoveOrCopy, PathBuf),
     /// Delete non-matching files
     Delete,
-}
-
-impl Action {
-    /// Get the type of matcher this action requires
-    pub fn matcher_type(&self) -> KeepFileMatcherType {
-        use Action::*;
-        use KeepFileMatcherType::*;
-        match self {
-            MoveOrCopyTo(_, _) => Include,
-            Delete => Exclude,
-        }
-    }
 }
 
 #[derive(Debug, Clone)]
@@ -505,41 +492,23 @@ impl FileFilter {
         FileFilter::try_load(config_path).unwrap_or_default()
     }
 
-    /// Check if a file name has one of the specified extensions
-    fn has_extension_impl<P: AsRef<Path>>(extensions: &[String], path: P) -> bool {
-        let path = path.as_ref();
-        match path.extension() {
-            Some(ext) => match ext.to_str() {
-                Some(ext) => extensions.contains(&ext.to_string()),
-                None => false,
-            },
-            None => false,
-        }
-    }
-
     /// Check if a file name has one of the configured extensions
     pub fn has_extension<P: AsRef<Path>>(&self, path: P) -> bool {
-        Self::has_extension_impl(&self.extensions, path)
-    }
-
-    /// Check if a file name has one of the formats
-    fn has_format_impl<P: AsRef<Path>>(formats: &[Format], extensions: &[String], path: P) -> bool {
-        formats
-            .iter()
-            .filter_map(|f| f.matches(extensions, path.as_ref()))
-            .any(|x| x)
+        let path = path.as_ref();
+        
+        path.extension()
+            .and_then(|ext| ext.to_str())
+            .map(|ext| ext.to_string())
+            .map(|ext| self.extensions.contains(&ext))
+            .unwrap_or(false)
     }
 
     /// Check if a file name has one of the configured formats
     pub fn has_format<P: AsRef<Path>>(&self, path: P) -> bool {
-        Self::has_format_impl(&self.formats, &self.extensions, path)
-    }
-
-    /// Check if a file name matches the one of the formats and has one of the extensions
-    fn matches_impl<P: AsRef<Path>>(formats: &[Format], extensions: &[String], path: P) -> bool {
-        let path = path.as_ref();
-        Self::has_extension_impl(extensions, path)
-            && Self::has_format_impl(formats, extensions, path)
+        self.formats
+            .iter()
+            .filter_map(|f| f.matches(&self.extensions, path.as_ref()))
+            .any(|x| x)
     }
 
     /// Check if a file name matches one of the configured formats and has one of the configured extensions
@@ -557,15 +526,8 @@ impl FileFilter {
     /// The matcher function is a closure that captures the `extensions` and `formats` fields of the `FileFilter` struct,
     /// and is cloneable. This allows the matcher function to be used in multiple places without cloning the `FileFilter` struct,
     /// and allows cloning of the iterators where the matcher function is used.
-    pub fn into_matcher(self) -> impl Fn(&&PathBuf) -> bool + Clone {
-        let extensions = Rc::new(RefCell::new(self.extensions));
-        let formats = Rc::new(RefCell::new(self.formats));
-
-        move |path| {
-            let extensions = extensions.borrow();
-            let format = formats.borrow();
-            Self::matches_impl(&format, &extensions, path)
-        }
+    pub fn into_matcher(self) -> Rc<dyn Fn(&&PathBuf) -> bool> {
+        Rc::new(move |path| self.matches(path))
     }
 }
 
@@ -620,15 +582,6 @@ impl IntoIterator for KeepFile {
     }
 }
 
-/// The type of matcher to generate from the keep file
-#[derive(Debug, Copy, Clone)]
-pub enum KeepFileMatcherType {
-    /// Include files that match the numbers in the keep file
-    Include,
-    /// Exclude files that match the numbers in the keep file
-    Exclude,
-}
-
 impl KeepFile {
     /// Get an iterator over the list of numbers to keep
     pub fn iter(&self) -> std::slice::Iter<KeepFileLine> {
@@ -651,34 +604,46 @@ impl KeepFile {
             .map_or(false, |m: u32| m == num)
     }
 
-    /// Convert the keep file into a matcher function
+    /// Convert the keep file into an inclusive filter
     ///
     /// This method converts the keep file into a matcher function that can be used to filter files.
+    /// Filter will allow files that were found in the original match file
     ///
-    /// The matcher function takes a reference to a `PathBuf` and returns a boolean indicating whether the file should be kept.
+    /// The filter function takes a reference to a `PathBuf` and returns a boolean indicating whether the file should be kept.
     ///
-    /// The matcher function is a closure that captures the `lines` field of the `KeepFile` struct,
-    /// and is cloneable. This allows the matcher function to be used in multiple places without cloning the `KeepFile` struct,
+    /// The filter is a closure that captures the `lines` field of the `KeepFile` struct,
+    /// and is cloneable. This allows the filter to be used in multiple places without cloning the `KeepFile` struct,
     /// and allows cloning of the iterators where the matcher function is used.
-    pub fn into_matcher(self, mtype: KeepFileMatcherType) -> impl Fn(&&PathBuf) -> bool + Clone {
-        let lines = Rc::new(RefCell::new(self.lines));
-        move |path| {
-            // Get the file name, exit early if it doesn't exist
+    pub fn into_inclusion_matcher(self) -> Rc<dyn Fn(&&PathBuf) -> bool> {
+        Rc::new(move |path| {
             let Some(filename) = path.file_name().and_then(|f| f.to_str()) else {
                 return false;
             };
-            use KeepFileMatcherType::*;
-            match mtype {
-                Include => lines
-                    .borrow()
-                    .iter()
-                    .any(|KeepFileLine(num)| Self::matches_number(filename, *num)),
-                Exclude => lines
-                    .borrow()
-                    .iter()
-                    .all(|KeepFileLine(num)| !Self::matches_number(filename, *num)),
-            }
-        }
+            self.lines
+                .iter()
+                .any(|KeepFileLine(num)| Self::matches_number(filename, *num))
+        })
+    }
+
+    /// Convert the keep file into an inclusive filter
+    ///
+    /// This method converts the keep file into a matcher function that can be used to filter files.
+    /// Filter will allow files that were not found in the original match file
+    ///
+    /// The filter function takes a reference to a `PathBuf` and returns a boolean indicating whether the file should be kept.
+    ///
+    /// The filter is a closure that captures the `lines` field of the `KeepFile` struct,
+    /// and is cloneable. This allows the filter to be used in multiple places without cloning the `KeepFile` struct,
+    /// and allows cloning of the iterators where the matcher function is used.
+    pub fn into_exclusion_matcher(self) -> Rc<dyn Fn(&&PathBuf) -> bool> {
+        Rc::new(move |path| {
+            let Some(filename) = path.file_name().and_then(|f| f.to_str()) else {
+                return false;
+            };
+            self.lines
+                .iter()
+                .all(|KeepFileLine(num)| !Self::matches_number(filename, *num))
+        })
     }
 }
 
