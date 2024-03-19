@@ -41,6 +41,36 @@ fn handle_delete(app_config: AppConfig, matching_files: impl FileSource) {
     }
 }
 
+fn move_file<P: AsRef<Path>, Q: AsRef<Path>>(from: P, to: Q) -> Result<(), std::io::Error> {
+    match to.as_ref().parent() {
+        Some(parent) => {
+            // Create the parent directories if they don't exist
+            std::fs::create_dir_all(parent)?;
+            std::fs::rename(from, to)?;
+            Ok(())
+        }
+        None => Err(std::io::Error::new(
+            std::io::ErrorKind::Other,
+            "Failed to get parent directory",
+        )),
+    }
+}
+
+fn copy_file<P: AsRef<Path>, Q: AsRef<Path>>(from: P, to: Q) -> Result<(), std::io::Error> {
+    match to.as_ref().parent() {
+        Some(parent) => {
+            // Create the parent directories if they don't exist
+            std::fs::create_dir_all(parent)?;
+            std::fs::copy(from, to)?;
+            Ok(())
+        }
+        None => Err(std::io::Error::new(
+            std::io::ErrorKind::Other,
+            "Failed to get parent directory",
+        )),
+    }
+}
+
 /// Moves files that match the filter to the specified directory
 ///
 /// Moves files that match the filter to the specified directory. If `dry_run` is true, the files will not be moved.
@@ -73,20 +103,10 @@ fn handle_move_to(app_config: AppConfig, matching_files: impl FileSource, dest_d
         if options.verbose {
             println!("Moving from {} to {}", src.display(), dest.display());
         }
-        
-        match dest.parent() {
-            Some(parent) => {
-                // Create the parent directories if they don't exist
-                std::fs::create_dir_all(parent).expect("Failed to create directory");
-                if let Err(e) = std::fs::rename(src, dest) {
-                    eprintln!("Error: {}", e);
-                    errors += 1;
-                }
-            }
-            None => {
-                eprintln!("Error: Failed to get parent directory");
-                errors += 1;
-            }
+
+        if let Err(e) = move_file(src, dest) {
+            eprintln!("Error: {}", e);
+            errors += 1;
         }
     }
     if errors > 0 {
@@ -122,23 +142,12 @@ fn handle_copy_to(app_config: AppConfig, matching_files: impl FileSource, dest_d
         let Ok(dest) = src.strip_prefix(src_dir).map(|p| dest_dir.join(p)) else {
             continue;
         };
-
         if options.verbose {
             println!("Copying from {} to {}", src.display(), dest.display());
         }
-        match dest.parent() {
-            Some(parent) => {
-                // Create the parent directories if they don't exist
-                std::fs::create_dir_all(parent).expect("Failed to create directory");
-                if let Err(e) = std::fs::copy(src, dest) {
-                    eprintln!("Error: {}", e);
-                    errors += 1;
-                }
-            }
-            None => {
-                eprintln!("Error: Failed to get parent directory");
-                errors += 1;
-            }
+        if let Err(e) = copy_file(src, dest) {
+            eprintln!("Error: {}", e);
+            errors += 1;
         }
     }
     if errors > 0 {
