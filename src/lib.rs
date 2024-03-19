@@ -72,12 +72,6 @@ pub struct SelectedFiles {
     pub files: Vec<PathBuf>,
 }
 
-impl SelectedFiles {
-    pub fn iter(&self) -> impl Iterator<Item = &PathBuf> + Clone {
-        self.files.iter()
-    }
-}
-
 impl TryFrom<SelectedDirectory> for SelectedFiles {
     type Error = std::io::Error;
     fn try_from(selected: SelectedDirectory) -> Result<Self, Self::Error> {
@@ -92,12 +86,7 @@ impl TryFrom<SelectedDirectory> for SelectedFiles {
 pub trait FileSource {
     fn dir(&self) -> &Path;
 
-    fn files(&self) -> impl Iterator<Item = &PathBuf> + Clone;
-
-    fn iter(&self) -> impl Iterator<Item = &PathBuf> + Clone {
-        self.files()
-    }
-
+    fn iter(&self) -> impl Iterator<Item = &PathBuf> + Clone;
     fn count(&self) -> usize {
         self.iter().count()
     }
@@ -117,7 +106,8 @@ impl FileSource for SelectedFiles {
     fn dir(&self) -> &Path {
         &self.dir.0
     }
-    fn files(&self) -> impl Iterator<Item = &PathBuf> + Clone {
+
+    fn iter(&self) -> impl Iterator<Item = &PathBuf> + Clone {
         self.files.iter()
     }
 }
@@ -130,7 +120,7 @@ pub struct FilteredFiles<F: FileSource> {
 
 impl<F: FileSource> FilteredFiles<F> {
     pub fn iter(&self) -> impl Iterator<Item = &PathBuf> + Clone {
-        self.source.files().filter(self.matcher.deref().clone())
+        self.source.iter().filter(self.matcher.deref())
     }
 }
 
@@ -138,8 +128,8 @@ impl<F: FileSource> FileSource for FilteredFiles<F> {
     fn dir(&self) -> &Path {
         self.source.dir()
     }
-    fn files(&self) -> impl Iterator<Item = &PathBuf> + Clone {
-        self.iter()
+    fn iter(&self) -> impl Iterator<Item = &PathBuf> + Clone {
+        self.source.iter()
     }
 }
 
