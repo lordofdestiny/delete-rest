@@ -93,16 +93,16 @@ pub trait FileSource {
 
     /// Get an iterator over the files in the source
     fn iter(&self) -> impl Iterator<Item = &PathBuf> + Clone;
-    
+
     /// Get the number of files in the source
-    /// 
+    ///
     /// This method is linear in time complexity
     fn count(&self) -> usize {
         self.iter().count()
     }
-    
+
     /// Filter the files in the source, using the specified filter
-    /// 
+    ///
     /// This method returns a new `FilteredFiles` struct that contains the files that match the specified filter
     fn filter_by(self, filter: Rc<dyn Fn(&&PathBuf) -> bool>) -> FilteredFiles<Self>
     where
@@ -126,11 +126,11 @@ impl FileSource for SelectedFiles {
 }
 
 /// Files filtered by a matcher function
-/// 
+///
 /// This struct represents files that have been filtered by a matcher function.
-/// 
+///
 /// It is used to chain multiple filters together
-/// 
+///
 /// Files are filter on demand, so the filter is not applied until the files are iterated over
 #[derive(Clone)]
 pub struct FilteredFiles<F: FileSource> {
@@ -181,7 +181,7 @@ impl<F: FileSource> FileSource for FilteredFiles<F> {
     about = "A CLI app to delete files based on a configuration file"
 )]
 #[command(arg_required_else_help(true))]
-pub struct AppConfig {
+pub struct Args {
     /// The directory to search for files
     #[clap(short, long, default_value = ".", value_name = "DIR")]
     path: String,
@@ -191,7 +191,7 @@ pub struct AppConfig {
     keep: String,
 
     /// The configuration file to use
-    #[clap(long, visible_alias="cfg", visible_short_alias='Y')]
+    #[clap(long, visible_alias = "cfg", visible_short_alias = 'Y')]
     config: Option<String>,
 
     /// Move matching files to the specified directory
@@ -265,13 +265,13 @@ impl MoveOrCopy {
     }
 
     /// Perform the move or copy operation
-    /// 
+    ///
     /// This method moves or copies a file from the `from` path to the `to` path.
-    /// 
+    ///
     /// # Arguments
     /// - `from` - the source path
     /// - `to` - the destination path
-    /// 
+    ///
     /// # Errors
     /// Possible errors include:
     /// - If the parent directory of the destination path does not exist
@@ -307,7 +307,7 @@ pub struct ExecutionOptions {
     pub verbose: bool,
 }
 
-impl AppConfig {
+impl Args {
     /// Get the path of the keep file
     pub fn keepfile(&self) -> &str {
         &self.keep
@@ -458,39 +458,43 @@ impl Display for FileFilter {
 impl Default for FileFilter {
     fn default() -> Self {
         // Get the path of the executable
-        std::env::current_exe()
+        let install_dir = std::env::current_exe()
             .ok()
-            .and_then(|mut path| {
-                // Attempt to read the config.yaml file from the same directory as the executable
-                path.pop();
-                let exec_dir = path.clone();
-                path.push("config.yaml");
+            .and_then(|p| p.parent().map(|p| p.to_owned()))
+            .filter(|p| p.exists());
 
-                match FileFilter::try_load(&path) {
-                    Some(config) => Some(config),
-                    None => {
-                        // Attempt to read the config.yaml file from the parent directory of the executable
-                        let mut path = exec_dir.clone();
-                        path.pop();
-                        path.push("config.yaml");
-                        FileFilter::try_load(&path)
-                    }
-                }
-            })
-            .or_else(|| {
-                // Fallback to the default embedded config
-                let config_str = include_str!("default_config.yaml");
-                serde_yaml::from_str(config_str).ok()?
-            })
-            .unwrap_or_else(|| FileFilter {
-                // Fallback to the hardcoded default config
-                name: Some("default_all".to_owned()),
-                extensions: ["jpg", "png", "cr2"]
-                    .into_iter()
-                    .map(String::from)
-                    .collect(),
-                formats: vec![regex!(r#".+\d+"#).clone().into()],
-            })
+        // Look for a file named `config.yaml` in the same directory as the executable
+        if let Some(filter) = install_dir
+            .as_ref()
+            .map(|p| p.join("config.yaml"))
+            .filter(|p| p.exists())
+            .and_then(|p| FileFilter::try_load(&p))
+        {
+            return filter;
+        }
+
+        // Look for a file named `config.yaml` in the parent directory of the executable
+        if let Some(filter) = install_dir
+            .as_ref()
+            .and_then(|p| p.parent().map(|p| p.join("config.yaml")))
+            .filter(|p| p.exists())
+            .and_then(|p| FileFilter::try_load(&p))
+        {
+            return filter;
+        }
+
+        // Try to load the default configuration from the embedded file
+        if let Ok(config) = serde_yaml::from_str(include_str!("default_config.yaml")) {
+            return config;
+        }
+
+        // Fallback to the hardcoded default config
+        FileFilter {
+            // Fallback to the hardcoded default config
+            name: Some("default_all".to_owned()),
+            extensions: vec![], // All extensions
+            formats: vec![regex!(r#".+\d+"#).clone().into()],
+        }
     }
 }
 

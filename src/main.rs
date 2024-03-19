@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use clap::Parser;
 
 use delete_rest_lib::{
-    Action, AppConfig, ExecutionOptions, FileSource, KeepFileError, MoveOrCopy, SelectedFiles,
+    Action, Args, ExecutionOptions, FileSource, KeepFileError, MoveOrCopy, SelectedFiles,
 };
 
 /// Deletes files that match the filter
@@ -15,7 +15,7 @@ use delete_rest_lib::{
 /// - `matching_files` - an iterator over the files to be deleted
 /// - `dry_run` - if true, the files will not be deleted
 /// - `verbose` - if true, the files will be printed before being deleted
-fn handle_delete(app_config: AppConfig, matching_files: impl FileSource) {
+fn handle_delete(app_config: Args, matching_files: impl FileSource) {
     let options = app_config.options();
     let mut errors = 0;
 
@@ -55,7 +55,7 @@ fn handle_delete(app_config: AppConfig, matching_files: impl FileSource) {
 /// - `dest_dir` - the destination directory
 fn handle_move_or_copy(
     op: MoveOrCopy,
-    app_config: AppConfig,
+    app_config: Args,
     matching_files: impl FileSource,
     dest_dir: PathBuf,
 ) {
@@ -106,7 +106,7 @@ fn handle_move_or_copy(
 /// 6. Execute the action
 fn main() {
     // Step 1
-    let app_cfg = AppConfig::parse();
+    let app_cfg = Args::parse();
 
     if app_cfg.print_config {
         println!("{}", app_cfg.filter_config());
