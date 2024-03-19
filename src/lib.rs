@@ -260,6 +260,41 @@ impl Action {
     }
 }
 
+pub enum MoveOrCopy {
+    Move,
+    Copy,
+}
+
+impl MoveOrCopy {
+    pub fn description(&self) -> &str {
+        match self {
+            MoveOrCopy::Move => "moved",
+            MoveOrCopy::Copy => "copied",
+        }
+    }
+
+    pub fn move_or_copy<P: AsRef<Path>, Q: AsRef<Path>>(
+        &self,
+        from: P,
+        to: Q,
+    ) -> Result<(), std::io::Error> {
+        match to.as_ref().parent() {
+            Some(parent) => {
+                // Create the parent directories if they don't exist
+                std::fs::create_dir_all(parent)?;
+                match self {
+                    MoveOrCopy::Move => std::fs::rename(from, to),
+                    MoveOrCopy::Copy => std::fs::copy(from, to).map(|_| ()),
+                }
+            }
+            None => Err(std::io::Error::new(
+                std::io::ErrorKind::Other,
+                "Failed to get parent directory",
+            )),
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct ExecutionOptions {
     pub dry_run: bool,

@@ -1,8 +1,10 @@
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use clap::Parser;
 
-use delete_rest_lib::{Action, AppConfig, ExecutionOptions, FileSource, KeepFileError, SelectedFiles};
+use delete_rest_lib::{
+    Action, AppConfig, ExecutionOptions, FileSource, KeepFileError, MoveOrCopy, SelectedFiles,
+};
 
 /// Deletes files that match the filter
 ///
@@ -21,18 +23,18 @@ fn handle_delete(app_config: AppConfig, matching_files: impl FileSource) {
         if options.verbose {
             matching_files
                 .iter()
-                .for_each(|file| println!("Deleting: {}", file.display()));
+                .for_each(|file| println!("Deleted: {}", file.display()));
         }
         return;
     }
 
     for file in matching_files.iter() {
-        if options.verbose {
-            println!("Deleting: {}", file.display());
-        }
         if let Err(e) = std::fs::remove_file(file) {
             eprintln!("Error: {}", e);
             errors += 1;
+        }
+        if options.verbose {
+            println!("Deleted: {}", file.display());
         }
     }
 
@@ -41,48 +43,23 @@ fn handle_delete(app_config: AppConfig, matching_files: impl FileSource) {
     }
 }
 
-fn move_file<P: AsRef<Path>, Q: AsRef<Path>>(from: P, to: Q) -> Result<(), std::io::Error> {
-    match to.as_ref().parent() {
-        Some(parent) => {
-            // Create the parent directories if they don't exist
-            std::fs::create_dir_all(parent)?;
-            std::fs::rename(from, to)?;
-            Ok(())
-        }
-        None => Err(std::io::Error::new(
-            std::io::ErrorKind::Other,
-            "Failed to get parent directory",
-        )),
-    }
-}
-
-fn copy_file<P: AsRef<Path>, Q: AsRef<Path>>(from: P, to: Q) -> Result<(), std::io::Error> {
-    match to.as_ref().parent() {
-        Some(parent) => {
-            // Create the parent directories if they don't exist
-            std::fs::create_dir_all(parent)?;
-            std::fs::copy(from, to)?;
-            Ok(())
-        }
-        None => Err(std::io::Error::new(
-            std::io::ErrorKind::Other,
-            "Failed to get parent directory",
-        )),
-    }
-}
-
-/// Moves files that match the filter to the specified directory
+/// Moves or copies files to the specified directory.
 ///
-/// Moves files that match the filter to the specified directory. If `dry_run` is true, the files will not be moved.
+/// If `dry_run` is true, the files will not be moved.
 /// If `verbose` is true, the files will be printed before being moved.
 ///
 /// # Arguments
+/// - `move_or_copy` - the action to perform (move or copy)
+/// - `app_config` - the application configuration
 /// - `matching_files` - an iterator over the files to be moved
-/// - `dir` - the directory to move the files to
-/// - `dry_run` - if true, the files will not be moved
-/// - `verbose` - if true, the files will be printed before being moved
-fn handle_move_to(app_config: AppConfig, matching_files: impl FileSource, dest_dir: PathBuf) {
-    let ExecutionOptions {dry_run, verbose} = app_config.options();
+/// - `dest_dir` - the destination directory
+fn handle_move_or_copy(
+    op: MoveOrCopy,
+    app_config: AppConfig,
+    matching_files: impl FileSource,
+    dest_dir: PathBuf,
+) {
+    let ExecutionOptions { dry_run, verbose } = app_config.options();
     let mut errors = 0;
 
     let src_dir = matching_files.dir();
@@ -93,47 +70,17 @@ fn handle_move_to(app_config: AppConfig, matching_files: impl FileSource, dest_d
         if dry_run {
             continue;
         }
-        if let Err(e) = move_file(src, &dest) {
+        if let Err(e) = op.move_or_copy(src, &dest) {
             eprintln!("Error: {}", e);
             errors += 1;
         }
         if verbose {
-            println!("Moved \"{}\" from to \"{}\"", src.display(), dest.display());
-        }
-    }
-    if errors > 0 {
-        eprintln!("{} errors occurred", errors);
-    }
-}
-
-/// Copies files that match the filter to the specified directory
-///
-/// Copies files that match the filter to the specified directory. If `dry_run` is true, the files will not be copied.
-/// If `verbose` is true, the files will be printed before being copied.
-///
-/// # Arguments
-/// - `matching_files` - an iterator over the files to be copied
-/// - `dir` - the directory to copy the files to
-/// - `dry_run` - if true, the files will not be copied
-/// - `verbose` - if true, the files will be printed before being copied
-fn handle_copy_to(app_config: AppConfig, matching_files: impl FileSource, dest_dir: PathBuf) {
-    let ExecutionOptions {dry_run, verbose} = app_config.options();
-    let mut errors = 0;
-
-    let src_dir = matching_files.dir();
-    for src in matching_files.iter() {
-        let Ok(dest) = src.strip_prefix(src_dir).map(|p| dest_dir.join(p)) else {
-            continue;
-        };
-        if dry_run{
-            continue;
-        }
-        if let Err(e) = copy_file(src, &dest) {
-            eprintln!("Error: {}", e);
-            errors += 1;
-        }
-        if verbose {
-            println!("Copied \"{}\" from to \"{}\"", src.display(), dest.display());
+            println!(
+                "{} \"{}\" from to \"{}\"",
+                op.description(),
+                src.display(),
+                dest.display()
+            );
         }
     }
     if errors > 0 {
@@ -228,10 +175,10 @@ fn main() {
             handle_delete(app_cfg, matching_files);
         }
         Action::MoveTo(dir) => {
-            handle_move_to(app_cfg, matching_files, dir);
+            handle_move_or_copy(MoveOrCopy::Move, app_cfg, matching_files, dir);
         }
         Action::CopyTo(dir) => {
-            handle_copy_to(app_cfg, matching_files, dir);
+            handle_move_or_copy(MoveOrCopy::Copy, app_cfg, matching_files, dir);
         }
     }
 }
