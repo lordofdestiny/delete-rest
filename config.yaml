@@ -1,6 +1,6 @@
-name: VLA
+name: default
 formats:
-  - VLA_\d{4}\.\w+
-extensions:
+  - IMG_\d{4}\.\w+
+#extensions:
   - jpg
   - png

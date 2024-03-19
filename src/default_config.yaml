@@ -1,6 +1,5 @@
-name: default
+name: default_builtin
 formats:
-  - VLA_\d{4}\.\w+
   - IMG_\d{4}\.\w+
 extensions:
   - jpg
