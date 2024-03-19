@@ -4,9 +4,7 @@ fn get_output_path() -> PathBuf {
     let manifest_dir_string = std::env::var("CARGO_MANIFEST_DIR").unwrap();
     let build_type = std::env::var("PROFILE").unwrap();
 
-    Path::new(&manifest_dir_string)
-        .join("target")
-        .join(build_type)
+    Path::new(&manifest_dir_string).join("target").join(build_type)
 }
 
 fn main() {

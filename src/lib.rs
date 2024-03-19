@@ -1,6 +1,7 @@
 use std::clone::Clone;
-use std::fmt::{Debug, Display};
-use std::io::BufRead;
+use std::fmt::{Debug, Display, Formatter};
+use std::fs::File;
+use std::io::{BufRead, BufReader};
 use std::ops::Deref;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
@@ -12,7 +13,7 @@ use regex_macro::regex;
 use serde::{Deserialize, Serialize};
 
 /// Selected source directory to seek files from
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct SelectedDirectory(PathBuf);
 
 impl TryFrom<PathBuf> for SelectedDirectory {
@@ -21,11 +22,14 @@ impl TryFrom<PathBuf> for SelectedDirectory {
         if path.is_dir() {
             path.canonicalize().map(Self)
         } else {
-            Err(std::io::Error::new(
-                std::io::ErrorKind::InvalidInput,
-                "Not a directory",
-            ))
+            Err(std::io::Error::new(std::io::ErrorKind::InvalidInput, "Not a directory"))
         }
+    }
+}
+
+impl AsRef<Path> for SelectedDirectory {
+    fn as_ref(&self) -> &Path {
+        self.0.as_ref()
     }
 }
 
@@ -68,7 +72,7 @@ impl SelectedDirectory {
 }
 
 /// Files selected from a directory
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct SelectedFiles {
     /// Directory the files where selected from
     pub dir: SelectedDirectory,
@@ -80,14 +84,11 @@ impl TryFrom<SelectedDirectory> for SelectedFiles {
     type Error = std::io::Error;
     fn try_from(selected: SelectedDirectory) -> Result<Self, Self::Error> {
         let files = selected.read_recursive_path()?;
-        Ok(SelectedFiles {
-            dir: selected,
-            files,
-        })
+        Ok(SelectedFiles { dir: selected, files })
     }
 }
 
-pub trait FileSource {
+pub trait FileSource: Debug {
     /// Get the path of the directory files are located in
     fn dir(&self) -> &Path;
 
@@ -138,9 +139,11 @@ pub struct FilteredFiles<F: FileSource> {
     matcher: Rc<dyn Fn(&&PathBuf) -> bool>,
 }
 
-impl<F: FileSource> FilteredFiles<F> {
-    pub fn iter(&self) -> impl Iterator<Item = &PathBuf> + Clone {
-        self.source.iter().filter(self.matcher.deref())
+impl<F: FileSource> Debug for FilteredFiles<F> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("FilteredFiles")
+            .field("source", &self.source)
+            .finish_non_exhaustive()
     }
 }
 
@@ -149,7 +152,7 @@ impl<F: FileSource> FileSource for FilteredFiles<F> {
         self.source.dir()
     }
     fn iter(&self) -> impl Iterator<Item = &PathBuf> + Clone {
-        self.source.iter()
+        self.source.iter().filter(self.matcher.deref())
     }
 }
 
@@ -174,7 +177,7 @@ impl<F: FileSource> FileSource for FilteredFiles<F> {
 /// - `dry_run`: Only print what would be done, don't actually do anything.
 /// - `verbose`: Print detailed information about what's happening
 /// - `print_config`: Print parsed configuration and exit
-#[derive(Parser, Debug)]
+#[derive(Parser, Debug, Clone)]
 #[clap(
     name = "delete-rest",
     author = "lordofdestiny",
@@ -184,11 +187,11 @@ impl<F: FileSource> FileSource for FilteredFiles<F> {
 pub struct Args {
     /// The directory to search for files
     #[clap(short, long, default_value = ".", value_name = "DIR")]
-    path: String,
+    path: Option<String>,
 
     /// The file to use as the keep file
-    #[clap(short, long, default_value = "keep.txt")]
-    keep: String,
+    #[clap(short, long)]
+    keep: Option<String>,
 
     /// The configuration file to use
     #[clap(long, visible_alias = "cfg", visible_short_alias = 'Y')]
@@ -236,6 +239,73 @@ pub struct Args {
     pub print_config: bool,
 }
 
+#[derive(Debug)]
+pub struct AppConfig {
+    pub path: SelectedDirectory,
+    pub filter: FileFilter,
+    pub keep: KeepFile,
+    pub action: Action,
+    pub options: ExecutionOptions,
+    pub print: bool,
+}
+
+#[derive(thiserror::Error, Debug)]
+pub enum AppConfigError {
+    #[error("{0}")]
+    Io(#[from] std::io::Error),
+    #[error("{0}")]
+    Config(#[from] ConfigFileError),
+    #[error("{0}")]
+    KeepFile(#[from] KeepFileError),
+}
+
+impl TryFrom<Args> for AppConfig {
+    type Error = AppConfigError;
+    fn try_from(args: Args) -> Result<Self, Self::Error> {
+        use std::io::{Error, ErrorKind::InvalidInput};
+        let Args {
+            path,
+            config,
+            keep,
+            copy_to,
+            move_to,
+            delete,
+            dry_run,
+            verbose,
+            print_config,
+        } = args;
+
+        let path = path
+            .as_deref()
+            .or(Some("."))
+            .map(PathBuf::from)
+            .filter(|p| p.exists() && p.is_dir())
+            .ok_or_else(|| Error::new(InvalidInput, "Invalid directory"))
+            .and_then(SelectedDirectory::try_from)?;
+
+        let cfg = match config.map(PathBuf::from).map(FileFilter::try_load) {
+            Some(file) => file?,
+            None => FileFilter::load(path.as_ref().join("config.yaml")),
+        };
+
+        let keepfile = match keep.map(PathBuf::from).map(KeepFile::try_load) {
+            Some(file) => file?,
+            None => KeepFile::try_load(path.as_ref().join("keep.txt"))?,
+        };
+
+        let action = Action::new(copy_to, move_to, delete);
+
+        Ok(AppConfig {
+            path,
+            filter: cfg,
+            keep: keepfile,
+            action,
+            options: ExecutionOptions { dry_run, verbose },
+            print: print_config,
+        })
+    }
+}
+
 /// The action to perform on matching files
 ///
 /// This enum represents the action to perform on matching files.
@@ -246,6 +316,29 @@ pub enum Action {
     MoveOrCopyTo(MoveOrCopy, PathBuf),
     /// Delete non-matching files
     Delete,
+}
+
+impl Action {
+    /// Construct a new action
+    ///
+    /// This method returns the action to perform on matching files, depending on the command line arguments.
+    /// It also returns a boolean indicating whether the action should be performed in dry-run mode.
+    ///
+    /// The actions are prioritized as follows:
+    /// - If `copy_to` is specified, the action is `CopyTo`.
+    /// - If `move_to` is specified, the action is `MoveTo`.
+    /// - If no action is specified, the action is `CopyTo`, with the default directory being `./selected`.
+    /// - If `delete` is specified, the action is `Delete`.
+    pub fn new(copy_to: Option<String>, move_to: Option<String>, delete: bool) -> Action {
+        use Action::*;
+        use MoveOrCopy::*;
+        match (move_to, copy_to, delete) {
+            (_, Some(path), _) => MoveOrCopyTo(Copy, PathBuf::from(path)),
+            (Some(path), _, _) => MoveOrCopyTo(Move, PathBuf::from(path)),
+            (None, None, false) => MoveOrCopyTo(Copy, PathBuf::from("selected")),
+            (_, _, true) => Delete,
+        }
+    }
 }
 
 /// The action to perform on matching files, as a move or copy operation
@@ -276,11 +369,7 @@ impl MoveOrCopy {
     /// Possible errors include:
     /// - If the parent directory of the destination path does not exist
     /// - If the parent directory of the destination path is not writable
-    pub fn move_or_copy<P: AsRef<Path>, Q: AsRef<Path>>(
-        &self,
-        from: P,
-        to: Q,
-    ) -> Result<(), std::io::Error> {
+    pub fn move_or_copy<P: AsRef<Path>, Q: AsRef<Path>>(&self, from: P, to: Q) -> Result<(), std::io::Error> {
         match to.as_ref().parent() {
             Some(parent) => {
                 // Create the parent directories if they don't exist
@@ -307,120 +396,6 @@ pub struct ExecutionOptions {
     pub verbose: bool,
 }
 
-impl Args {
-    /// Get the path of the keep file
-    pub fn keepfile(&self) -> &str {
-        &self.keep
-    }
-
-    /// Should the detailed information be printed?
-    pub fn verbose(&self) -> bool {
-        self.verbose
-    }
-
-    /// Should the action be performed in dry-run mode?
-    pub fn dry_run(&self) -> bool {
-        self.dry_run
-    }
-
-    /// Get the directory to search for files
-    pub fn directory(&self) -> Result<SelectedDirectory, std::io::Error> {
-        SelectedDirectory::try_from(PathBuf::from(&self.path))
-    }
-
-    /// Options for executin the action
-    ///
-    /// This method returns a tuple of booleans indicating whether the action should be performed in dry-run mode
-    /// and whether detailed information should be printed.
-    ///
-    /// The first element is the dry-run mode, and the second element is the verbose mode.
-    pub fn options(&self) -> ExecutionOptions {
-        ExecutionOptions {
-            dry_run: self.dry_run,
-            verbose: self.verbose,
-        }
-    }
-
-    /// Derive the action to perform on matching files
-    ///
-    /// This method returns the action to perform on matching files, depending on the command line arguments.
-    /// It also returns a boolean indicating whether the action should be performed in dry-run mode.
-    ///
-    /// The actions are prioritized as follows:
-    /// - If `copy_to` is specified, the action is `CopyTo`.
-    /// - If `move_to` is specified, the action is `MoveTo`.
-    /// - If no action is specified, the action is `CopyTo`, with the default directory being `./selected`.
-    /// - If `delete` is specified, the action is `Delete`.
-    pub fn action(&self) -> Action {
-        let Self {
-            delete,
-            move_to,
-            copy_to,
-            ..
-        } = self;
-
-        use Action::*;
-        use MoveOrCopy::*;
-        match (move_to, copy_to, delete) {
-            (_, Some(path), _) => MoveOrCopyTo(Copy, PathBuf::from(path)),
-            (Some(path), _, _) => MoveOrCopyTo(Move, PathBuf::from(path)),
-            (None, None, false) => MoveOrCopyTo(Copy, PathBuf::from("selected")),
-            (_, _, true) => Delete,
-        }
-    }
-
-    /// Read the keep file
-    ///
-    /// This method reads the keep file and returns a list of numbers to keep.
-    ///
-    /// # Errors
-    /// Possible errors include:
-    /// - If the keep file does not exist
-    /// - If the keep file is not readable
-    /// - If an I/O error occurs while reading the keep file
-    /// - If the keep file contains invalid lines
-    pub fn read_to_keep(&self) -> Result<KeepFile, KeepFileError> {
-        let path = Path::new(&self.keep).canonicalize()?;
-        let file = std::fs::File::open(path.clone())?;
-        let reader = std::io::BufReader::new(file);
-        // Split the lines into valid and invalid lines
-        let (valid, invalid): (Vec<_>, Vec<_>) = reader
-            .lines()
-            .enumerate()
-            // Filter out invalid lines
-            .filter_map(|(num, line)| line.ok().map(|line| (num, line)))
-            // Parse the lines into numbers, or return an error
-            .map(|(num, line)| match line.parse() {
-                Ok(ord) => Ok(KeepFileLine(ord)),
-                Err(_) => Err(KeepFileLineError(num, line)),
-            })
-            .partition_result();
-
-        if invalid.is_empty() {
-            Ok(KeepFile { lines: valid })
-        } else {
-            Err(KeepFileError::Format {
-                filename: self.keep.clone(),
-                lines: KeepFileLineErrors(invalid),
-            })
-        }
-    }
-
-    /// Get the file filter configuration
-    ///
-    /// This method returns the file filter configuration to use.
-    ///
-    /// If the `config` field is `None`, the default configuration is used.
-    /// Else, the configuration is loaded from the specified file.
-    pub fn filter_config(&self) -> FileFilter {
-        self.config
-            .as_ref()
-            .map_or_else(FileFilter::default, |config| {
-                FileFilter::load(Path::new(config))
-            })
-    }
-}
-
 /// A file filter configuration
 ///
 /// This type describes how to filter files based on their names and extensions.
@@ -442,7 +417,7 @@ pub struct FileFilter {
 }
 
 impl Display for FileFilter {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         writeln!(f, "Filter {{")?;
         if let Some(name) = &self.name {
             writeln!(f, "    Name: {:?},", name)?;
@@ -468,7 +443,7 @@ impl Default for FileFilter {
             .as_ref()
             .map(|p| p.join("config.yaml"))
             .filter(|p| p.exists())
-            .and_then(|p| FileFilter::try_load(&p))
+            .and_then(|p| FileFilter::try_load(p).ok())
         {
             return filter;
         }
@@ -478,7 +453,7 @@ impl Default for FileFilter {
             .as_ref()
             .and_then(|p| p.parent().map(|p| p.join("config.yaml")))
             .filter(|p| p.exists())
-            .and_then(|p| FileFilter::try_load(&p))
+            .and_then(|p| FileFilter::try_load(p).ok())
         {
             return filter;
         }
@@ -502,17 +477,19 @@ impl FileFilter {
     /// Try to load a file filter configuration from the specified path
     ///
     /// This method attempts to load a file filter configuration from the specified path.
-    ///
+    ///Ya
     /// If the file does not exist, or if an error occurs while reading the file, `None` is returned.
-    fn try_load(config_path: &Path) -> Option<Self> {
-        let config_str = std::fs::read_to_string(config_path).ok()?;
-        serde_yaml::from_str(&config_str).ok()?
+    fn try_load<P: AsRef<Path>>(config_path: P) -> Result<Self, ConfigFileError> {
+        let config_file = File::open(config_path)?;
+        let reader = BufReader::new(config_file);
+        let filter = serde_yaml::from_reader(reader)?;
+        Ok(filter)
     }
 
     /// Load a file filter configuration from the specified path
     ///
     /// Load a file filter configuration from the specified path, or return the default configuration if the file does not exist.
-    fn load(config_path: &Path) -> Self {
+    fn load<P: AsRef<Path>>(config_path: P) -> Self {
         FileFilter::try_load(config_path).unwrap_or_default()
     }
 
@@ -531,8 +508,7 @@ impl FileFilter {
     pub fn has_format<P: AsRef<Path>>(&self, path: P) -> bool {
         self.formats
             .iter()
-            .filter_map(|f| f.matches(&self.extensions, path.as_ref()))
-            .any(|x| x)
+            .any(|f| f.matches(&self.extensions, path.as_ref()).unwrap_or(false))
     }
 
     /// Check if a file name matches one of the configured formats and has one of the configured extensions
@@ -564,7 +540,7 @@ impl FileFilter {
 pub struct Format(#[serde(with = "serde_regex")] Regex);
 
 impl Display for Format {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(f, "\"{}\"", self.0.as_str())
     }
 }
@@ -597,6 +573,18 @@ pub struct KeepFile {
     pub lines: Vec<KeepFileLine>,
 }
 
+/// Wrapper around a number to keep
+#[derive(Debug)]
+pub struct KeepFileLine(u32);
+
+/// Number and content of a line in keep file that doesn't contain a number
+#[derive(Debug)]
+pub struct KeepFileBadLine(usize, String);
+
+/// List of lines in the keep file that don't contain a number
+#[derive(thiserror::Error, Debug)]
+pub struct KeepFileFormatError(pub Vec<KeepFileBadLine>);
+
 impl IntoIterator for KeepFile {
     type Item = KeepFileLine;
     type IntoIter = std::vec::IntoIter<Self::Item>;
@@ -607,6 +595,32 @@ impl IntoIterator for KeepFile {
 }
 
 impl KeepFile {
+    pub fn try_load<P: AsRef<Path>>(path: P) -> Result<KeepFile, KeepFileError> {
+        let file = File::open(path.as_ref())?;
+        let reader = BufReader::new(file);
+        // Split the lines into valid and invalid lines
+        let (valid, invalid): (Vec<_>, Vec<_>) = reader
+            .lines()
+            .enumerate()
+            // Filter out invalid lines
+            .filter_map(|(num, line)| line.ok().map(|line| (num, line)))
+            // Parse the lines into numbers, or return an error
+            .map(|(num, line)| match line.parse() {
+                Ok(ord) => Ok(KeepFileLine(ord)),
+                Err(_) => Err(KeepFileBadLine(num, line)),
+            })
+            .partition_result();
+
+        if invalid.is_empty() {
+            Ok(KeepFile { lines: valid })
+        } else {
+            Err(KeepFileError::Format {
+                file: path.as_ref().to_path_buf(),
+                lines: KeepFileFormatError(invalid),
+            })
+        }
+    }
+
     /// Get an iterator over the list of numbers to keep
     pub fn iter(&self) -> std::slice::Iter<KeepFileLine> {
         self.lines.iter()
@@ -643,9 +657,7 @@ impl KeepFile {
             let Some(filename) = path.file_name().and_then(|f| f.to_str()) else {
                 return false;
             };
-            self.lines
-                .iter()
-                .any(|KeepFileLine(num)| Self::matches_number(filename, *num))
+            self.lines.iter().any(|KeepFileLine(num)| Self::matches_number(filename, *num))
         })
     }
 
@@ -664,32 +676,26 @@ impl KeepFile {
             let Some(filename) = path.file_name().and_then(|f| f.to_str()) else {
                 return false;
             };
-            self.lines
-                .iter()
-                .all(|KeepFileLine(num)| !Self::matches_number(filename, *num))
+            self.lines.iter().all(|KeepFileLine(num)| !Self::matches_number(filename, *num))
         })
     }
 }
 
-/// Wrapper around a number to keep
-#[derive(Debug)]
-pub struct KeepFileLine(u32);
-
-/// Number and content of a line in keep file that doesn't contain a number
-#[derive(Debug)]
-pub struct KeepFileLineError(usize, String);
-
-/// List of lines in the keep file that don't contain a number
-#[derive(Debug)]
-pub struct KeepFileLineErrors(pub Vec<KeepFileLineError>);
-
-impl Display for KeepFileLineErrors {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        for err in self.0.iter() {
-            writeln!(f, "Line {}: {}", err.0, err.1)?;
+impl Display for KeepFileFormatError {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        for KeepFileBadLine(line, content) in self.0.iter() {
+            writeln!(f, "Line {line}: {content}")?;
         }
         Ok(())
     }
+}
+
+#[derive(thiserror::Error, Debug)]
+pub enum ConfigFileError {
+    #[error("Config I/O error: {0}")]
+    Io(#[from] std::io::Error),
+    #[error("Config parsing error: {0}")]
+    Yaml(#[from] serde_yaml::Error),
 }
 
 /// Error type for keep file loading
@@ -698,12 +704,9 @@ impl Display for KeepFileLineErrors {
 #[derive(thiserror::Error, Debug)]
 pub enum KeepFileError {
     /// The keep file contains invalid lines
-    #[error("One or more lines in the keepfile \"{}\" are invalid:\n{}", .filename, .lines)]
-    Format {
-        filename: String,
-        lines: KeepFileLineErrors,
-    },
+    #[error("One or more lines in the keepfile \"{}\" are invalid:\n{}", .file.display(), .lines)]
+    Format { file: PathBuf, lines: KeepFileFormatError },
     /// An I/O error occurred while reading the keep file
-    #[error("I/O error: {0}")]
+    #[error("Keepfile I/O error: {0}")]
     Io(#[from] std::io::Error),
 }
