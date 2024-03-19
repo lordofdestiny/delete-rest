@@ -49,7 +49,7 @@ fn handle_delete(app_config: AppConfig, matching_files: impl FileSource) {
 /// If `verbose` is true, the files will be printed before being moved.
 ///
 /// # Arguments
-/// - `move_or_copy` - the action to perform (move or copy)
+/// - `op` - the action to perform (move or copy)
 /// - `app_config` - the application configuration
 /// - `matching_files` - an iterator over the files to be moved
 /// - `dest_dir` - the destination directory
@@ -99,8 +99,8 @@ fn handle_move_or_copy(
 /// 2. Read the configuration file
 ///     - If the configuration file is not found, print an error message and return
 /// 3. Get the files that match the filter
-///     1. Get all the files in the specified path </li>
-///     2. Filter the files that match the filter </li>
+///     1. Get all the files in the specified path
+///     2. Filter the files that match the filter
 /// 4. Get the file names from the keep file
 /// 5. Process the files ( separate files to keep and files to delete )
 /// 6. Execute the action

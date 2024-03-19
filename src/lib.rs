@@ -11,6 +11,7 @@ use regex::Regex;
 use regex_macro::regex;
 use serde::{Deserialize, Serialize};
 
+/// Selected source directory to seek files from
 #[derive(Clone)]
 pub struct SelectedDirectory(PathBuf);
 
@@ -66,9 +67,12 @@ impl SelectedDirectory {
     }
 }
 
+/// Files selected from a directory
 #[derive(Clone)]
 pub struct SelectedFiles {
+    /// Directory the files where selected from
     pub dir: SelectedDirectory,
+    /// Selected files' paths
     pub files: Vec<PathBuf>,
 }
 
@@ -84,20 +88,29 @@ impl TryFrom<SelectedDirectory> for SelectedFiles {
 }
 
 pub trait FileSource {
+    /// Get the path of the directory files are located in
     fn dir(&self) -> &Path;
 
+    /// Get an iterator over the files in the source
     fn iter(&self) -> impl Iterator<Item = &PathBuf> + Clone;
+    
+    /// Get the number of files in the source
+    /// 
+    /// This method is linear in time complexity
     fn count(&self) -> usize {
         self.iter().count()
     }
     
-    fn filter_by(self, matcher: Rc<dyn Fn(&&PathBuf) -> bool>) -> FilteredFiles<Self>
+    /// Filter the files in the source, using the specified filter
+    /// 
+    /// This method returns a new `FilteredFiles` struct that contains the files that match the specified filter
+    fn filter_by(self, filter: Rc<dyn Fn(&&PathBuf) -> bool>) -> FilteredFiles<Self>
     where
         Self: Sized,
     {
         FilteredFiles {
             source: self,
-            matcher,
+            matcher: filter,
         }
     }
 }
@@ -112,6 +125,13 @@ impl FileSource for SelectedFiles {
     }
 }
 
+/// Files filtered by a matcher function
+/// 
+/// This struct represents files that have been filtered by a matcher function.
+/// 
+/// It is used to chain multiple filters together
+/// 
+/// Files are filter on demand, so the filter is not applied until the files are iterated over
 #[derive(Clone)]
 pub struct FilteredFiles<F: FileSource> {
     source: F,
@@ -231,6 +251,7 @@ pub enum Action {
     Delete,
 }
 
+/// The action to perform on matching files, as a move or copy operation
 #[derive(Debug, Clone)]
 pub enum MoveOrCopy {
     Move,
@@ -238,6 +259,7 @@ pub enum MoveOrCopy {
 }
 
 impl MoveOrCopy {
+    /// Get a description of the operation
     pub fn description(&self) -> &str {
         match self {
             MoveOrCopy::Move => "moved",
@@ -245,6 +267,18 @@ impl MoveOrCopy {
         }
     }
 
+    /// Perform the move or copy operation
+    /// 
+    /// This method moves or copies a file from the `from` path to the `to` path.
+    /// 
+    /// # Arguments
+    /// - `from` - the source path
+    /// - `to` - the destination path
+    /// 
+    /// # Errors
+    /// Possible errors include:
+    /// - If the parent directory of the destination path does not exist
+    /// - If the parent directory of the destination path is not writable
     pub fn move_or_copy<P: AsRef<Path>, Q: AsRef<Path>>(
         &self,
         from: P,
@@ -267,9 +301,12 @@ impl MoveOrCopy {
     }
 }
 
+/// Options for executing the action
 #[derive(Debug, Clone)]
 pub struct ExecutionOptions {
+    /// Should the action be performed in dry-run mode?
     pub dry_run: bool,
+    /// Should the detailed information be printed?
     pub verbose: bool,
 }
 
@@ -481,7 +518,7 @@ impl FileFilter {
     /// Check if a file name has one of the configured extensions
     pub fn has_extension<P: AsRef<Path>>(&self, path: P) -> bool {
         let path = path.as_ref();
-        
+
         path.extension()
             .and_then(|ext| ext.to_str())
             .map(|ext| ext.to_string())
