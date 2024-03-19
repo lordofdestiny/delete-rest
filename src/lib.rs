@@ -76,10 +76,6 @@ impl SelectedFiles {
     pub fn iter(&self) -> impl Iterator<Item = &PathBuf> + Clone {
         self.files.iter()
     }
-
-    pub fn len(&self) -> usize {
-        self.files.len()
-    }
 }
 
 impl TryFrom<SelectedDirectory> for SelectedFiles {
@@ -102,6 +98,10 @@ pub trait FileSource {
         self.files()
     }
 
+    fn count(&self) -> usize {
+        self.iter().count()
+    }
+    
     fn filter_by(self, matcher: Rc<dyn Fn(&&PathBuf) -> bool>) -> FilteredFiles<Self>
     where
         Self: Sized,
@@ -131,10 +131,6 @@ pub struct FilteredFiles<F: FileSource> {
 impl<F: FileSource> FilteredFiles<F> {
     pub fn iter(&self) -> impl Iterator<Item = &PathBuf> + Clone {
         self.source.files().filter(self.matcher.deref().clone())
-    }
-
-    pub fn count(&self) -> usize {
-        self.iter().count()
     }
 }
 

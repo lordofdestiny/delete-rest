@@ -134,7 +134,7 @@ fn main() {
     };
 
     // Step 3.2
-    let total_count = files.len();
+    let total_count = files.count();
     let matching_files = files.filter_by(filter.into_matcher());
     let matching_count = matching_files.count();
 
