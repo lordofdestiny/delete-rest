@@ -177,18 +177,6 @@ fn handle_move_or_copy(op: MoveOrCopy, options: ExecutionOptions, matching_files
 /// The main function
 ///
 /// The main function parses the command line arguments, reads the configuration file, and processes the files.
-///
-/// # Steps
-/// 1. Parse the command line arguments
-///     - If there is no arguments, or the `--help` flag is set, print the help message and return
-/// 2. Read the configuration file
-///     - If the configuration file is not found, print an error message and return
-/// 3. Get the files that match the filter
-///     1. Get all the files in the specified path
-///     2. Filter the files that match the filter
-/// 4. Get the file names from the keep file
-/// 5. Process the files ( separate files to keep and files to delete )
-/// 6. Execute the action
 fn main() {
     let args = Args::parse();
 
