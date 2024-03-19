@@ -2,7 +2,7 @@ use std::path::{Path, PathBuf};
 
 use clap::Parser;
 
-use delete_rest_lib::{Action, AppConfig, FileSource, KeepFileError, SelectedFiles};
+use delete_rest_lib::{Action, AppConfig, ExecutionOptions, FileSource, KeepFileError, SelectedFiles};
 
 /// Deletes files that match the filter
 ///
@@ -82,31 +82,23 @@ fn copy_file<P: AsRef<Path>, Q: AsRef<Path>>(from: P, to: Q) -> Result<(), std::
 /// - `dry_run` - if true, the files will not be moved
 /// - `verbose` - if true, the files will be printed before being moved
 fn handle_move_to(app_config: AppConfig, matching_files: impl FileSource, dest_dir: PathBuf) {
-    let options = app_config.options();
+    let ExecutionOptions {dry_run, verbose} = app_config.options();
     let mut errors = 0;
-
-    if options.dry_run {
-        if options.verbose {
-            matching_files
-                .iter()
-                .for_each(|file| println!("Moving: {}", file.display()));
-        }
-        return;
-    }
 
     let src_dir = matching_files.dir();
     for src in matching_files.iter() {
         let Ok(dest) = src.strip_prefix(src_dir).map(|p| dest_dir.join(p)) else {
             continue;
         };
-
-        if options.verbose {
-            println!("Moving from {} to {}", src.display(), dest.display());
+        if dry_run {
+            continue;
         }
-
-        if let Err(e) = move_file(src, dest) {
+        if let Err(e) = move_file(src, &dest) {
             eprintln!("Error: {}", e);
             errors += 1;
+        }
+        if verbose {
+            println!("Moved \"{}\" from to \"{}\"", src.display(), dest.display());
         }
     }
     if errors > 0 {
@@ -125,29 +117,23 @@ fn handle_move_to(app_config: AppConfig, matching_files: impl FileSource, dest_d
 /// - `dry_run` - if true, the files will not be copied
 /// - `verbose` - if true, the files will be printed before being copied
 fn handle_copy_to(app_config: AppConfig, matching_files: impl FileSource, dest_dir: PathBuf) {
-    let options = app_config.options();
+    let ExecutionOptions {dry_run, verbose} = app_config.options();
     let mut errors = 0;
-
-    if options.dry_run {
-        if options.verbose {
-            matching_files
-                .iter()
-                .for_each(|file| println!("Copying: {}", file.display()));
-        }
-        return;
-    }
 
     let src_dir = matching_files.dir();
     for src in matching_files.iter() {
         let Ok(dest) = src.strip_prefix(src_dir).map(|p| dest_dir.join(p)) else {
             continue;
         };
-        if options.verbose {
-            println!("Copying from {} to {}", src.display(), dest.display());
+        if dry_run{
+            continue;
         }
-        if let Err(e) = copy_file(src, dest) {
+        if let Err(e) = copy_file(src, &dest) {
             eprintln!("Error: {}", e);
             errors += 1;
+        }
+        if verbose {
+            println!("Copied \"{}\" from to \"{}\"", src.display(), dest.display());
         }
     }
     if errors > 0 {
