@@ -191,14 +191,13 @@ pub struct AppConfig {
     keep: String,
 
     /// The configuration file to use
-    #[clap(long)]
+    #[clap(long, visible_alias="cfg", visible_short_alias='Y')]
     config: Option<String>,
 
     /// Move matching files to the specified directory
     /// This option is mutually exclusive with `delete` and `copy-to`
     #[clap(
         short,
-        long,
         conflicts_with_all = &["copy_to", "delete"],
         group = "action",
         value_name = "DIR"
@@ -209,7 +208,6 @@ pub struct AppConfig {
     /// This option is mutually exclusive with `move-to` and `delete`
     #[clap(
         short,
-        long,
         conflicts_with_all = &["move_to", "delete"],
         group = "action",
         value_name = "DIR"
@@ -220,7 +218,6 @@ pub struct AppConfig {
     /// This option is mutually exclusive with `move-to` and `copy-to`
     #[clap(
         short,
-        long,
         conflicts_with_all = &["move_to", "copy_to"],
         group = "action",
     )]
@@ -235,7 +232,7 @@ pub struct AppConfig {
     verbose: bool,
 
     /// Print parsed configuration and exit
-    #[clap(long, exclusive = true)]
+    #[clap(long)]
     pub print_config: bool,
 }
 
