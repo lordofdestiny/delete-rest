@@ -1,10 +1,11 @@
 //! Module with declarations related to [FileSource] trait
 
-use crate::SelectedDirectory;
 use std::fmt::{Debug, Formatter};
 use std::ops::Deref;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
+
+use crate::SelectedDirectory;
 
 /// Files selected from a directory
 #[derive(Debug, Clone)]
@@ -94,5 +95,57 @@ impl<F: FileSource> FileSource for FilteredFiles<F> {
 impl<F: FileSource> FilteredFiles<F> {
     pub fn source(&self) -> &F {
         &self.source
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+    use crate::test_utils::*;
+    
+    #[test]
+    fn test_selected_directory() -> TestResult {
+        let selected = SelectedDirectory::try_from(resource_dir())?;
+        assert_eq!(selected.0, resource_dir());
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_selected_files() -> TestResult {
+        let selected = SelectedDirectory::try_from(resource_dir())?;
+        let files = SelectedFiles::try_from(selected)?;
+        assert_eq!(files.dir.0, resource_dir());
+        assert!(!files.files.is_empty());
+
+        for file in files.files.iter() {
+            assert!(test_filenames().contains(file), "File not found: {:?}", file);
+        }
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_filtered_files() -> TestResult {
+        let selected = SelectedDirectory::try_from(resource_dir()).unwrap();
+        let files = SelectedFiles::try_from(selected).unwrap();
+        let filtered = files.filter_by(Rc::new(|f| get_extension(f).unwrap() == "txt"));
+        assert_eq!(filtered.source().dir.0, resource_dir());
+        assert!(!filtered.source().files.is_empty());
+        assert_eq!(filtered.iter().count(), filtered.source().files.len() - 1);
+
+        for file in filtered.iter() {
+            assert!(get_extension(file).unwrap().ends_with("txt"));
+        }
+
+        for file in test_filenames() {
+            if get_extension(file).unwrap().ends_with("txt") {
+                assert!(filtered.iter().any(|f| f == file));
+            } else {
+                assert!(!filtered.iter().any(|f| f == file));
+            }
+        }
+
+        Ok(())
     }
 }

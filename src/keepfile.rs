@@ -1,12 +1,13 @@
 //! Module containing declarations related to [KeepFile] struct
 
-use itertools::Itertools;
-use regex_macro::regex;
 use std::fmt::{Display, Formatter};
 use std::fs::File;
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
+
+use itertools::Itertools;
+use regex_macro::regex;
 
 /// A list of numbers to keep
 ///
@@ -50,7 +51,7 @@ impl KeepFile {
             // Parse the lines into numbers, or return an error
             .map(|(num, line)| match line.parse() {
                 Ok(ord) => Ok(KeepFileLine(ord)),
-                Err(_) => Err(KeepFileBadLine(num, line)),
+                Err(_) => Err(KeepFileBadLine(num + 1, line)),
             })
             .partition_result();
 
@@ -135,4 +136,79 @@ pub enum KeepFileError {
     /// An I/O error occurred while reading the keep file
     #[error("Keepfile I/O error: {0}")]
     Io(#[from] std::io::Error),
+}
+
+
+#[cfg(test)]
+mod test {
+    use crate::test_utils::*;
+
+    use super::*;
+
+    #[test]
+    pub fn test_load_keepfile() -> TestResult {
+        KeepFile::try_load(resource_dir().join("keep.txt"))?;
+        Ok(())
+    }
+
+    #[test]
+    pub fn test_load_keepfile_error() -> TestResult {
+        let result = KeepFile::try_load(resource_dir().join("keep_bad.txt"));
+        assert!(result.is_err());
+
+        let error = result.unwrap_err();
+
+        match error {
+            KeepFileError::Format { file, lines } => {
+                assert_eq!(file, resource_dir().join("keep_bad.txt"));
+                assert_eq!(lines.0.len(), 2);
+
+                let mut lines = lines.0.iter();
+                let error = lines.next().unwrap();
+                assert_eq!(error.0, 1);
+                assert_eq!(error.1, "daf");
+                let error = lines.next().unwrap();
+                assert_eq!(error.0, 2);
+                assert_eq!(error.1, "hello");
+
+                assert!(lines.next().is_none(), "No more errors");
+            }
+            _ => panic!("Unexpected error: {:?}", error),
+        }
+
+
+        Ok(())
+    }
+
+    #[test]
+    pub fn test_keepfile_properly_loaded() -> TestResult {
+        let keepfile = KeepFile::try_load(resource_dir().join("keep.txt"))?;
+        assert_eq!(keepfile.lines.len(), 2);
+        // Keep TXT_1
+        assert_eq!(keepfile.lines[0].0, 1);
+        // Keep TXT_4
+        assert_eq!(keepfile.lines[1].0, 4);
+
+        Ok(())
+    }
+    
+    #[test]
+    pub fn test_keepfile_inclusion_matcher() -> TestResult {
+        let keepfile = KeepFile::try_load(resource_dir().join("keep.txt"))?;
+        let matcher = keepfile.into_inclusion_matcher();
+        
+        // In the keepfile
+        assert!(matcher(&&PathBuf::from("TXT_1")));
+        assert!(matcher(&&PathBuf::from("TXT_4")));
+        
+        // Not in the keepfile
+        assert!(!matcher(&&PathBuf::from("TXT_2")));
+        assert!(!matcher(&&PathBuf::from("TXT_3")));
+        assert!(!matcher(&&PathBuf::from("TXT_5")));
+        
+        // Without a number
+        assert!(!matcher(&&PathBuf::from("TXT")));
+        
+        Ok(())
+    }
 }
