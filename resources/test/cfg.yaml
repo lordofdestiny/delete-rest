@@ -1,0 +1,6 @@
+name: test_cfg
+formats:
+  - TXT_\d+.*
+extensions:
+  - txt
+  - csv

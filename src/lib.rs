@@ -18,6 +18,9 @@ pub mod action;
 pub mod config;
 pub mod file_source;
 pub mod keepfile;
+#[cfg(test)]
+#[doc(hidden)]
+pub mod test_utils;
 
 /// Selected source directory to seek files from
 #[derive(Debug, Clone)]
@@ -129,7 +132,7 @@ pub struct Args {
     )]
     move_to: Option<String>,
 
-    /// Copy matching files to the specified directory. 
+    /// Copy matching files to the specified directory.
     /// Mutually exclusive with `move-to` and `delete`
     #[clap(
         short,

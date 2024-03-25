@@ -34,9 +34,9 @@
 //! This brings up the follwing explanation
 //! ```text
 //! A CLI app to delete files based on a configuration file
-//! 
+//!
 //! Usage: delete-rest.exe [OPTIONS]
-//! 
+//!
 //! Options:
 //!   -p, --path <DIR>       The directory to search for files [default: .]
 //!   -k, --keep <KEEP>      The file to use as the keep file
@@ -55,12 +55,12 @@
 //! copy is always preferred, then move, and then delete. ***If none of these three flags is provided,
 //! but other flags where, the default behaviour is to copy***.
 //!
-//! Files are looked up by default in the current working directory (directory the script 
-//! was run from). This is also the case for the keepfile and configuration file. 
+//! Files are looked up by default in the current working directory (directory the script
+//! was run from). This is also the case for the keepfile and configuration file.
 //! You can override this behaviour with the `-p` flag, which specifies the working directory.
-//! If no `-k` or `--config` flags are provided, keepfile are config file are also looked up 
-//! from the same directory. 
-//! 
+//! If no `-k` or `--config` flags are provided, keepfile are config file are also looked up
+//! from the same directory.
+//!
 //! When config file is not explicitly provided, it will look up several places,
 //! or default to builtin configuration. Lookup order is the following:
 //! - In the working directory
@@ -76,14 +76,14 @@
 //!       - png
 //!       - cr2
 //!     ```
-//! 
+//!
 //! To provide a custom path to the keepfile use `-k` file. This path can be both relative
-//! and absolute. If the provided keepfile has errors, program exits. 
-//! 
-//! To provide a custom path to the config file use `--config`, `--cfg` or `-Y` flags. 
+//! and absolute. If the provided keepfile has errors, program exits.
+//!
+//! To provide a custom path to the config file use `--config`, `--cfg` or `-Y` flags.
 //! They are just aliases. This option also accepts relative and absolute paths.  
 //! If the detected keepfile has errors, program exits.
-//! 
+//!
 //! You can use `-v-` ( `--verobse` ) flag to print a detailed list of all files that are
 //! being moved/copied/deleted.
 //!
@@ -98,9 +98,9 @@ use std::path::PathBuf;
 
 use clap::Parser;
 
-use delete_rest_lib::{AppConfig, Args, ExecutionOptions};
 use delete_rest_lib::action::{Action, MoveOrCopy};
 use delete_rest_lib::file_source::{FileSource, SelectedFiles};
+use delete_rest_lib::{AppConfig, Args, ExecutionOptions};
 
 /// Deletes files that from the provided source
 ///

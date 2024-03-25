@@ -1,14 +1,15 @@
 //! Module containing declarations related to [ConfigFile] struct
 
-use itertools::Itertools;
-use regex::Regex;
-use regex_macro::regex;
-use serde::{Deserialize, Serialize};
 use std::fmt::{Display, Formatter};
 use std::fs::File;
 use std::io::BufReader;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
+
+use itertools::Itertools;
+use regex::Regex;
+use regex_macro::regex;
+use serde::{Deserialize, Serialize};
 
 /// A file filter configuration
 ///
@@ -128,7 +129,7 @@ impl ConfigFile {
     /// Check if a file name matches one of the configured formats and has one of the configured extensions
     pub fn matches<P: AsRef<Path>>(&self, path: P) -> bool {
         let path = path.as_ref();
-        self.has_format(path) && self.has_extension(path)
+        self.has_extension(path) && self.has_format(path)
     }
 
     /// Convert the  configuration into a filter function
@@ -166,9 +167,12 @@ impl Format {
     pub fn matches<P: AsRef<Path>>(&self, extensions: &[String], path: P) -> Option<bool> {
         let path = path.as_ref();
         let file_name = path.file_name()?.to_str()?;
-        let file_extension = path.extension()?.to_str()?.to_string();
-
-        Some(extensions.contains(&file_extension.to_string()) && self.0.is_match(file_name))
+        
+        let extension_match = match path.extension().and_then(|ext| ext.to_str()){ 
+            Some(ext) => extensions.contains(&ext.to_string()),
+            None => true
+        };
+        Some(extension_match && self.0.is_match(file_name))
     }
 }
 
@@ -178,4 +182,86 @@ pub enum ConfigFileError {
     Io(#[from] std::io::Error),
     #[error("Config parsing error: {0}")]
     Yaml(#[from] serde_yaml::Error),
+}
+
+#[cfg(test)]
+mod test {
+    use crate::test_utils::resource_dir;
+
+    use super::*;
+
+    #[test]
+    fn load_config_file() {
+        let config = ConfigFile::load(resource_dir().join("cfg.yaml"));
+        assert_eq!(config.name, Some("test_cfg".to_owned()));
+        assert_eq!(config.extensions, vec!["txt".to_owned(), "csv".to_owned()]);
+        assert_eq!(config.formats.len(), 1);
+    }
+
+    #[test]
+    fn default_config_file() {
+        let _: ConfigFile = serde_yaml::from_str(include_str!("default_config.yaml")).unwrap();
+    }
+
+    #[test]
+    fn has_extension() {
+        let config = ConfigFile {
+            name: None,
+            extensions: vec!["txt".to_owned(), "csv".to_owned()],
+            formats: vec![],
+        };
+
+        assert!(config.has_extension("test.txt"));
+        assert!(config.has_extension("test.csv"));
+        assert!(!config.has_extension("test.md"));
+    }
+
+    #[test]
+    fn has_format_no_ext() {
+        let config = ConfigFile {
+            name: None,
+            extensions: vec![],
+            formats: vec![regex!(r#".+\d+"#).clone().into()],
+        };
+
+        assert!(config.has_format("test1"));
+        assert!(config.has_format("test2"));
+        assert!(!config.has_format("test"));
+    }
+    
+    #[test]
+    fn has_format_with_ext() {
+        let config = ConfigFile {
+            name: None,
+            extensions: vec!["txt".to_owned()],
+            formats: vec![regex!(r#".+\d+"#).clone().into()],
+        };
+
+        assert!(config.has_format("test1.txt"));
+        assert!(config.has_format("test2.txt"));
+        assert!(!config.has_format("test.txt"));
+        
+        assert!(!config.has_format("test1.md"));
+        assert!(!config.has_format("test1.md"));
+        assert!(!config.has_format("test.md"));
+    }
+    
+    #[test]
+    fn into_filter() {
+        let config = ConfigFile {
+            name: None,
+            extensions: vec!["txt".to_owned()],
+            formats: vec![regex!(r#".+\d+"#).clone().into()],
+        };
+
+        let filter = config.into_filter();
+        
+        assert!(filter(&&PathBuf::from("test1.txt")));
+        assert!(filter(&&PathBuf::from("test2.txt")));
+        assert!(!filter(&&PathBuf::from("test.txt")));
+        
+        assert!(!filter(&&PathBuf::from("test1.md")));
+        assert!(!filter(&&PathBuf::from("test1.md")));
+        assert!(!filter(&&PathBuf::from("test.md")));
+    }
 }
