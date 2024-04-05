@@ -49,7 +49,7 @@ impl KeepFile {
             // Filter out invalid lines
             .filter_map(|(num, line)| line.ok().map(|line| (num, line)))
             // Parse the lines into numbers, or return an error
-            .map(|(num, line)| match line.parse() {
+            .map(|(num, line)| match line.trim().parse() {
                 Ok(ord) => Ok(KeepFileLine(ord)),
                 Err(_) => Err(KeepFileBadLine(num + 1, line)),
             })
