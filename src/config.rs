@@ -123,7 +123,7 @@ impl ConfigFile {
     pub fn has_format<P: AsRef<Path>>(&self, path: P) -> bool {
         self.formats
             .iter()
-            .any(|f| f.matches(&self.extensions, path.as_ref()).unwrap_or(false))
+            .any(|f| f.matches(&path).unwrap_or(false))
     }
 
     /// Check if a file name matches one of the configured formats and has one of the configured extensions
@@ -164,15 +164,11 @@ impl From<Regex> for Format {
 
 impl Format {
     /// Check if a file name matches the format, and has one of the specified extensions
-    pub fn matches<P: AsRef<Path>>(&self, extensions: &[String], path: P) -> Option<bool> {
+    pub fn matches<P: AsRef<Path>>(&self, path: P) -> Option<bool> {
         let path = path.as_ref();
         let file_name = path.file_name()?.to_str()?;
         
-        let extension_match = match path.extension().and_then(|ext| ext.to_str()){ 
-            Some(ext) => extensions.contains(&ext.to_string()),
-            None => true
-        };
-        Some(extension_match && self.0.is_match(file_name))
+        Some(self.0.is_match(file_name))
     }
 }
 
