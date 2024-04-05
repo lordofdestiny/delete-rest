@@ -1,5 +1,6 @@
 //! Module containing declarations related to [ConfigFile] struct
 
+use std::convert::identity;
 use std::fmt::{Display, Formatter};
 use std::fs::File;
 use std::io::BufReader;
@@ -110,26 +111,21 @@ impl ConfigFile {
 
     /// Check if a file name has one of the configured extensions
     pub fn has_extension<P: AsRef<Path>>(&self, path: P) -> bool {
-        let path = path.as_ref();
-
-        path.extension()
+        path.as_ref()
+            .extension()
             .and_then(|ext| ext.to_str())
-            .map(|ext| ext.to_string())
-            .map(|ext| self.extensions.contains(&ext))
-            .unwrap_or(false)
+            .map(|ext| ext.to_ascii_lowercase())
+            .map_or(false, |ext| self.extensions.contains(&ext))
     }
 
     /// Check if a file name has one of the configured formats
     pub fn has_format<P: AsRef<Path>>(&self, path: P) -> bool {
-        self.formats
-            .iter()
-            .any(|f| f.matches(&self.extensions, path.as_ref()).unwrap_or(false))
+        self.formats.iter().filter_map(|f| f.matches(&path)).any(identity)
     }
 
     /// Check if a file name matches one of the configured formats and has one of the configured extensions
     pub fn matches<P: AsRef<Path>>(&self, path: P) -> bool {
-        let path = path.as_ref();
-        self.has_extension(path) && self.has_format(path)
+        self.has_extension(&path) && self.has_format(&path)
     }
 
     /// Convert the  configuration into a filter function
@@ -164,15 +160,11 @@ impl From<Regex> for Format {
 
 impl Format {
     /// Check if a file name matches the format, and has one of the specified extensions
-    pub fn matches<P: AsRef<Path>>(&self, extensions: &[String], path: P) -> Option<bool> {
+    pub fn matches<P: AsRef<Path>>(&self, path: P) -> Option<bool> {
         let path = path.as_ref();
         let file_name = path.file_name()?.to_str()?;
-        
-        let extension_match = match path.extension().and_then(|ext| ext.to_str()){ 
-            Some(ext) => extensions.contains(&ext.to_string()),
-            None => true
-        };
-        Some(extension_match && self.0.is_match(file_name))
+
+        Some(self.0.is_match(file_name))
     }
 }
 
@@ -228,7 +220,7 @@ mod test {
         assert!(config.has_format("test2"));
         assert!(!config.has_format("test"));
     }
-    
+
     #[test]
     fn has_format_with_ext() {
         let config = ConfigFile {
@@ -240,12 +232,12 @@ mod test {
         assert!(config.has_format("test1.txt"));
         assert!(config.has_format("test2.txt"));
         assert!(!config.has_format("test.txt"));
-        
+
         assert!(!config.has_format("test1.md"));
         assert!(!config.has_format("test1.md"));
         assert!(!config.has_format("test.md"));
     }
-    
+
     #[test]
     fn into_filter() {
         let config = ConfigFile {
@@ -255,11 +247,11 @@ mod test {
         };
 
         let filter = config.into_filter();
-        
+
         assert!(filter(&&PathBuf::from("test1.txt")));
         assert!(filter(&&PathBuf::from("test2.txt")));
         assert!(!filter(&&PathBuf::from("test.txt")));
-        
+
         assert!(!filter(&&PathBuf::from("test1.md")));
         assert!(!filter(&&PathBuf::from("test1.md")));
         assert!(!filter(&&PathBuf::from("test.md")));
