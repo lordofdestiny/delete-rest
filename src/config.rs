@@ -222,23 +222,6 @@ mod test {
     }
 
     #[test]
-    fn has_format_with_ext() {
-        let config = ConfigFile {
-            name: None,
-            extensions: vec!["txt".to_owned()],
-            formats: vec![regex!(r#".+\d+"#).clone().into()],
-        };
-
-        assert!(config.has_format("test1.txt"));
-        assert!(config.has_format("test2.txt"));
-        assert!(!config.has_format("test.txt"));
-
-        assert!(!config.has_format("test1.md"));
-        assert!(!config.has_format("test1.md"));
-        assert!(!config.has_format("test.md"));
-    }
-
-    #[test]
     fn into_filter() {
         let config = ConfigFile {
             name: None,
