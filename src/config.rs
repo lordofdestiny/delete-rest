@@ -114,7 +114,7 @@ impl ConfigFile {
 
         path.extension()
             .and_then(|ext| ext.to_str())
-            .map(|ext| ext.to_string())
+            .map(|ext| ext.to_ascii_lowercase())
             .map(|ext| self.extensions.contains(&ext))
             .unwrap_or(false)
     }
